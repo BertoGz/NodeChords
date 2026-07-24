@@ -4,7 +4,17 @@ import { formatChord } from '../theory/chords.js'
 import { formatKey } from '../theory/keys.js'
 
 function ChordNodeComponent({ data, selected }) {
-  const { chord, isStart, mode, targetSymbol, key, intent, modulateTo, modulateRole } = data
+  const {
+    chord,
+    isStart,
+    mode,
+    targetSymbol,
+    key,
+    intent,
+    modulateTo,
+    modulateRole,
+    playing,
+  } = data
   const filled = Boolean(chord)
   const symbol = filled ? formatChord(chord) : '—'
   const modulating = intent === 'modulate' && modulateTo
@@ -34,6 +44,7 @@ function ChordNodeComponent({ data, selected }) {
         modulateRole === 'setup' ? 'chord-node--mod-step' : '',
         isStart ? 'chord-node--start' : '',
         selected ? 'chord-node--selected' : '',
+        playing ? 'chord-node--playing' : '',
       ]
         .filter(Boolean)
         .join(' ')}

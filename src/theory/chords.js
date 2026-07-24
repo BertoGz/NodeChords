@@ -107,14 +107,90 @@ export function balancedMidiNotes(chord) {
   return [bass, ...upper]
 }
 
+export const VOICINGS = [
+  { id: 'balanced', label: 'Balanced', hint: 'Even register, low root' },
+  { id: 'close', label: 'Close', hint: 'Root position, tight stack' },
+  { id: 'open', label: 'Open', hint: 'Drop-2, airier spacing' },
+  { id: 'spread', label: 'Spread', hint: 'Wide, piano-style' },
+  { id: 'shell', label: 'Shell', hint: 'Root + guide tones' },
+  { id: 'inv1', label: '1st inversion', hint: '3rd in the bass' },
+  { id: 'inv2', label: '2nd inversion', hint: '5th in the bass' },
+]
+
+export const DEFAULT_VOICING = 'balanced'
+
+export function voicingLabel(id) {
+  return VOICINGS.find((v) => v.id === id)?.label ?? 'Balanced'
+}
+
+/** Root-position stack starting near C4, one note per chord tone. */
+function closeStack(chord) {
+  const intervals = QUALITY_INTERVALS[chord.quality] || QUALITY_INTERVALS.maj
+  const rootPc = chord.root % 12
+  let root = 60 + rootPc
+  if (root > 66) root -= 12 // keep the top of every chord in a similar band
+  const notes = [...new Set(intervals)].sort((a, b) => a - b).map((i) => root + i)
+  return notes
+}
+
+function invert(notes, times) {
+  const out = [...notes]
+  for (let i = 0; i < times && out.length > 1; i++) {
+    out.push(out.shift() + 12)
+  }
+  return out
+}
+
+function dropTwo(notes) {
+  if (notes.length < 3) return notes
+  const sorted = [...notes].sort((a, b) => a - b)
+  const secondFromTop = sorted.length - 2
+  sorted[secondFromTop] -= 12
+  return sorted.sort((a, b) => a - b)
+}
+
+function spreadVoicing(chord) {
+  const notes = closeStack(chord)
+  const bass = notes[0] - 12
+  const upper = notes.slice(1).map((n, i) => (i % 2 === 1 ? n + 12 : n))
+  return [bass, ...upper]
+}
+
+/** Root in the bass plus the tones that define the quality (3rd/7th). */
+function shellVoicing(chord) {
+  const intervals = QUALITY_INTERVALS[chord.quality] || QUALITY_INTERVALS.maj
+  const rootPc = chord.root % 12
+  const third = intervals.find((i) => [2, 3, 4, 5].includes(i))
+  const seventh = intervals.find((i) => [9, 10, 11].includes(i))
+  const guides = [third, seventh ?? 7].filter((i) => i !== undefined)
+  return [36 + rootPc, ...guides.map((i) => 60 + ((rootPc + i) % 12))].sort((a, b) => a - b)
+}
+
+export function voicingMidiNotes(chord, voicing = DEFAULT_VOICING) {
+  switch (voicing) {
+    case 'close':
+      return closeStack(chord)
+    case 'open':
+      return dropTwo(closeStack(chord))
+    case 'spread':
+      return spreadVoicing(chord)
+    case 'shell':
+      return shellVoicing(chord)
+    case 'inv1':
+      return invert(closeStack(chord), 1)
+    case 'inv2':
+      return invert(closeStack(chord), 2)
+    case 'balanced':
+    default:
+      return balancedMidiNotes(chord)
+  }
+}
 
 
 
 
-
-
-export function chordMidiNotes(chord, balanced = true) {
-  return balanced ? balancedMidiNotes(chord) : midiNotes(chord, 3)
+export function chordMidiNotes(chord, voicing = DEFAULT_VOICING) {
+  return voicingMidiNotes(chord, voicing)
 }
 
 export function allChords() {

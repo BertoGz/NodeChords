@@ -1,5 +1,11 @@
 import { useMemo, useState } from 'react'
-import { ROOT_NAMES, QUALITIES, QUALITY_LABELS, formatChord } from '../theory/chords.js'
+import {
+  ROOT_NAMES,
+  QUALITIES,
+  QUALITY_LABELS,
+  DEFAULT_VOICING,
+  formatChord,
+} from '../theory/chords.js'
 import { MODES, createKey, diatonicChords, formatKey } from '../theory/keys.js'
 import { playChord } from '../audio/playChord.js'
 
@@ -12,6 +18,7 @@ export default function ChordPalette({
   onHomeKeyChange,
   preferDiatonic,
   showKeyPicker,
+  voicing = DEFAULT_VOICING,
 }) {
   const [query, setQuery] = useState('')
   const [rootFilter, setRootFilter] = useState(null)
@@ -137,7 +144,7 @@ export default function ChordPalette({
               disabled={disabled}
               title={QUALITY_LABELS[chord.quality] || chord.quality}
               onClick={() => {
-                playChord(chord)
+                playChord(chord, { voicing })
                 onPick?.(chord)
               }}
             >

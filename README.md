@@ -1,4 +1,4 @@
-# Chord Builder
+# NodeChords
 
 React app for building chord progressions as a directed graph.
 
@@ -7,6 +7,7 @@ React app for building chord progressions as a directed graph.
 - Suggestions use **Build** mode (tension) by default
 - Draw an edge from a node back to Start → **Resolve** suggestions (cadences into Node 1)
 - Play individual chords or the progression path
+- Each node has its own **voicing** (balanced, close, open, spread, shell, inversions), set from the side panel; new nodes inherit the previous node's choice
 
 ```bash
 npm install

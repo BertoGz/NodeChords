@@ -1,5 +1,4 @@
-import { chordMidiNotes, formatChord } from '../theory/chords.js'
-import { getBalancedVoicing } from '../audio/playChord.js'
+import { chordMidiNotes, DEFAULT_VOICING, formatChord } from '../theory/chords.js'
 
 function writeVarLen(value) {
   const buffer = [value & 0x7f]
@@ -18,8 +17,9 @@ function strBytes(s) {
 /**
  * Build a Type-0 Standard MIDI File from a chord progression.
  * Each chord is one quarter note (PPQ=480).
+ * @param {Array<{chord: object, voicing?: string}|object>} steps
  */
-export function buildMidiFile(chords, { balanced = getBalancedVoicing(), bpm = 90 } = {}) {
+export function buildMidiFile(steps, { bpm = 90 } = {}) {
   const PPQ = 480
   const events = []
 
@@ -32,7 +32,7 @@ export function buildMidiFile(chords, { balanced = getBalancedVoicing(), bpm = 9
   // Time signature 4/4
   events.push({ tick: 0, bytes: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08] })
   // Track name
-  const name = 'Chord Builder'
+  const name = 'NodeChords'
   events.push({ tick: 0, bytes: [0xff, 0x03, name.length, ...strBytes(name)] })
   // Program change — acoustic grand
   events.push({ tick: 0, bytes: [0xc0, 0] })
@@ -40,9 +40,10 @@ export function buildMidiFile(chords, { balanced = getBalancedVoicing(), bpm = 9
   let tick = 0
   const duration = PPQ // one quarter per chord
 
-  for (const chord of chords) {
+  for (const step of steps) {
+    const chord = step?.chord ?? step
     if (!chord) continue
-    const notes = chordMidiNotes(chord, balanced)
+    const notes = chordMidiNotes(chord, step?.voicing || DEFAULT_VOICING)
     const label = formatChord(chord)
     // Optional text meta for DAW visibility
     const text = `Chord: ${label}`
@@ -91,9 +92,9 @@ export function buildMidiFile(chords, { balanced = getBalancedVoicing(), bpm = 9
   return new Uint8Array([...header, ...track])
 }
 
-export function downloadMidi(chords, filename = 'chord-progression.mid') {
-  if (!chords?.length) return false
-  const data = buildMidiFile(chords)
+export function downloadMidi(steps, filename = 'chord-progression.mid') {
+  if (!steps?.length) return false
+  const data = buildMidiFile(steps)
   const blob = new Blob([data], { type: 'audio/midi' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

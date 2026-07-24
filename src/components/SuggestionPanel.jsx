@@ -1,4 +1,11 @@
-import { formatChord, chordId } from '../theory/chords.js'
+import { useEffect, useRef, useState } from 'react'
+import {
+  formatChord,
+  chordId,
+  DEFAULT_VOICING,
+  VOICINGS,
+  voicingLabel,
+} from '../theory/chords.js'
 import { formatKey } from '../theory/keys.js'
 import { playChord } from '../audio/playChord.js'
 
@@ -11,14 +18,37 @@ export default function SuggestionPanel({
   intent,
   modulateTo,
   modulateRole,
+  voicing = DEFAULT_VOICING,
   onAssign,
   onPlay,
   onClearChord,
-  onLoopToStart,
-  canLoopToStart,
   onStayInKey,
   onOpenModulate,
+  onVoicingChange,
 }) {
+  const [voicingOpen, setVoicingOpen] = useState(false)
+  const voicingRef = useRef(null)
+
+  useEffect(() => {
+    if (!voicingOpen) return
+    const onPointer = (e) => {
+      if (!voicingRef.current?.contains(e.target)) setVoicingOpen(false)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setVoicingOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [voicingOpen])
+
+  useEffect(() => {
+    setVoicingOpen(false)
+  }, [selectedNode?.id])
+
   if (!selectedNode) {
     return (
       <aside className="panel">
@@ -88,19 +118,48 @@ export default function SuggestionPanel({
         </div>
       )}
 
-      {canLoopToStart && (
-        <div className="panel__actions">
-          <button type="button" className="btn btn--ghost" onClick={onLoopToStart}>
-            Loop to Start → Resolve
-          </button>
-        </div>
-      )}
-
       {chord && (
         <div className="panel__actions">
-          <button type="button" className="btn btn--ghost" onClick={() => playChord(chord)}>
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => playChord(chord, { voicing })}
+          >
             Play chord
           </button>
+          <div className="voicing-menu" ref={voicingRef}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              aria-haspopup="menu"
+              aria-expanded={voicingOpen}
+              title="Change how this chord is voiced"
+              onClick={() => setVoicingOpen((open) => !open)}
+            >
+              {voicingLabel(voicing)} ▾
+            </button>
+            {voicingOpen && (
+              <div className="voicing-menu__dropdown" role="menu">
+                <p className="voicing-menu__title">Voicing for this node</p>
+                {VOICINGS.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={v.id === voicing}
+                    className={`voicing-menu__item ${v.id === voicing ? 'is-active' : ''}`}
+                    onClick={() => {
+                      onVoicingChange?.(v.id)
+                      playChord(chord, { voicing: v.id })
+                    }}
+                  >
+                    <span className="voicing-menu__label">{v.label}</span>
+                    <span className="voicing-menu__hint">{v.hint}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {!selectedNode.data?.isStart && (
             <button type="button" className="btn btn--ghost" onClick={onClearChord}>
               Clear chord
@@ -129,7 +188,7 @@ export default function SuggestionPanel({
                 type="button"
                 className={`suggestion ${active ? 'is-active' : ''}`}
                 onClick={() => {
-                  playChord(s.chord)
+                  playChord(s.chord, { voicing })
                   onAssign(s.chord)
                 }}
               >

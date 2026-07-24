@@ -7,9 +7,7 @@ export default function Toolbar({
   canPlay,
   canExport,
   canSave,
-  balancedVoicing,
   saveStatus,
-  onToggleVoicing,
   onAddNode,
   onDelete,
   onPlay,
@@ -41,18 +39,10 @@ export default function Toolbar({
   return (
     <div className="toolbar">
       <div className="toolbar__brand">
-        <span className="toolbar__mark">Chord Builder</span>
+        <span className="toolbar__mark">NodeChords</span>
         {saveStatus && <span className="toolbar__save">{saveStatus}</span>}
       </div>
       <div className="toolbar__actions">
-        <label className="voicing-toggle" title="Keep chords in a mid register so they stay clear">
-          <input
-            type="checkbox"
-            checked={balancedVoicing}
-            onChange={(e) => onToggleVoicing(e.target.checked)}
-          />
-          <span>Balanced voicing</span>
-        </label>
         <button type="button" className="btn" disabled={!canAddNode} onClick={onAddNode}>
           Add node
         </button>

@@ -196,27 +196,66 @@ button {
   background: var(--line);
 }
 
-.voicing-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-right: 0.35rem;
-  font-size: 0.78rem;
-  font-weight: 600;
+.voicing-menu {
+  position: relative;
+}
+
+.voicing-menu__dropdown {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 20;
+  min-width: 13.5rem;
+  padding: 0.3rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.voicing-menu__title {
+  margin: 0.15rem 0.55rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--ink-soft);
-  cursor: pointer;
-  user-select: none;
 }
 
-.voicing-toggle input {
-  accent-color: var(--teal);
-  width: 0.95rem;
-  height: 0.95rem;
-  cursor: pointer;
-}
-
-.voicing-toggle:hover {
+.voicing-menu__item {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
   color: var(--ink);
+  padding: 0.4rem 0.55rem;
+  cursor: pointer;
+}
+
+.voicing-menu__item:hover {
+  background: rgba(24, 24, 27, 0.06);
+}
+
+.voicing-menu__item.is-active {
+  background: rgba(24, 24, 27, 0.09);
+}
+
+.voicing-menu__label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.voicing-menu__item.is-active .voicing-menu__label::after {
+  content: ' ✓';
+}
+
+.voicing-menu__hint {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
 }
 
 .btn {
@@ -524,6 +563,7 @@ button {
 
 .panel__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
   padding: 0.75rem 1rem 0;
 }
@@ -782,6 +822,13 @@ button {
 
 .chord-node--selected {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow);
+}
+
+.chord-node--playing {
+  box-shadow: 0 0 0 3px #18181b, 0 0 0 6px rgba(24, 24, 27, 0.18), var(--shadow);
+  transform: scale(1.04);
+  background: #f4f4f5;
+  z-index: 2;
 }
 
 .chord-node--start {

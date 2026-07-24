@@ -18,7 +18,7 @@ import SuggestionPanel from './components/SuggestionPanel.jsx'
 import Toolbar from './components/Toolbar.jsx'
 import ConfirmModal from './components/ConfirmModal.jsx'
 import ModulateModal from './components/ModulateModal.jsx'
-import { formatChord } from './theory/chords.js'
+import { DEFAULT_VOICING, formatChord } from './theory/chords.js'
 import { createKey, formatKey } from './theory/keys.js'
 import {
   previousChord,
@@ -28,7 +28,7 @@ import {
   suggest,
   suggestionModeForNode,
 } from './theory/suggest.js'
-import { playProgression, setBalancedVoicing } from './audio/playChord.js'
+import { playProgression, stopProgression } from './audio/playChord.js'
 import { clearProject, createAutosave, loadProject, saveProject } from './storage/db.js'
 import {
   downloadProjectFile,
@@ -84,13 +84,17 @@ function nodeChord(node) {
   return node?.data?.chord ?? null
 }
 
-/** Walk from start along first outgoing edge. */
+function nodeVoicing(node) {
+  return node?.data?.voicing || DEFAULT_VOICING
+}
+
+/** Walk from start along first outgoing edge. Returns [{ id, chord, voicing }, ...]. */
 function progressionPath(nodes, edges) {
   const start = nodes.find((n) => n.data?.isStart)
   const startChordValue = nodeChord(start)
   if (!startChordValue) return []
 
-  const chords = [startChordValue]
+  const steps = [{ id: start.id, chord: startChordValue, voicing: nodeVoicing(start) }]
   const visited = new Set([start.id])
   let current = start.id
 
@@ -103,11 +107,11 @@ function progressionPath(nodes, edges) {
     const next = nodes.find((n) => n.id === out.target)
     const chord = nodeChord(next)
     if (!chord) break
-    chords.push(chord)
+    steps.push({ id: next.id, chord, voicing: nodeVoicing(next) })
     current = out.target
   }
 
-  return chords
+  return steps
 }
 
 function enrichNodes(nodes, edges) {
@@ -142,12 +146,12 @@ export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [selectedNodeId, setSelectedNodeId] = useState(null)
-  const [balancedVoicing, setBalancedVoicingState] = useState(true)
   const [draftKey, setDraftKey] = useState(() => createKey(0, 'major'))
   const [hydrated, setHydrated] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
   const [resetOpen, setResetOpen] = useState(false)
   const [modulateOpen, setModulateOpen] = useState(false)
+  const [playingNodeId, setPlayingNodeId] = useState(null)
   const autosaveRef = useRef(null)
 
   useEffect(() => {
@@ -173,10 +177,6 @@ export default function App() {
             })),
           )
           if (project.draftKey) setDraftKey(project.draftKey)
-          if (typeof project.balancedVoicing === 'boolean') {
-            setBalancedVoicingState(project.balancedVoicing)
-            setBalancedVoicing(project.balancedVoicing)
-          }
           if (project.selectedNodeId) setSelectedNodeId(project.selectedNodeId)
           syncIdCounterFromNodes(loadedNodes)
           if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
@@ -200,16 +200,10 @@ export default function App() {
       nodes: serializeNodes(nodes),
       edges: serializeEdges(edges),
       draftKey,
-      balancedVoicing,
       selectedNodeId,
       idCounter,
     })
-  }, [nodes, edges, draftKey, balancedVoicing, selectedNodeId, hydrated])
-
-  const handleToggleVoicing = useCallback((enabled) => {
-    setBalancedVoicingState(enabled)
-    setBalancedVoicing(enabled)
-  }, [])
+  }, [nodes, edges, draftKey, selectedNodeId, hydrated])
 
   const startId = useMemo(() => startNodeId(nodes), [nodes])
   const hasStart = Boolean(startId)
@@ -229,6 +223,7 @@ export default function App() {
   const intent = selectedNode?.data?.intent ?? 'stay'
   const modulateTo = selectedNode?.data?.modulateTo ?? null
   const modulateRole = selectedNode?.data?.modulateRole ?? null
+  const selectedVoicing = nodeVoicing(selectedNode)
 
   const suggestions = useMemo(() => {
     if (!selectedNode) return []
@@ -349,6 +344,7 @@ export default function App() {
             key,
             intent: 'stay',
             modulateTo: null,
+            voicing: DEFAULT_VOICING,
             isStart: true,
             mode: null,
             targetSymbol: '',
@@ -374,6 +370,7 @@ export default function App() {
     if (!source) return
 
     const inheritedKey = source.data?.key ?? draftKey
+    const inheritedVoicing = nodeVoicing(source)
     const id = nextId()
     const newNode = {
       id,
@@ -389,6 +386,7 @@ export default function App() {
         modulateTo: null,
         modulateFromKey: null,
         modulateRole: null,
+        voicing: inheritedVoicing,
         isStart: false,
         mode: 'build',
         targetSymbol: '',
@@ -434,6 +432,18 @@ export default function App() {
       return enrichNodes(next, edges)
     })
   }, [selectedNodeId, nodes, edges, setNodes])
+
+  const handleVoicingChange = useCallback(
+    (voicing) => {
+      if (!selectedNodeId) return
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === selectedNodeId ? { ...n, data: { ...n.data, voicing } } : n,
+        ),
+      )
+    },
+    [selectedNodeId, setNodes],
+  )
 
   const handleStayInKey = useCallback(() => {
     if (!selectedNodeId) return
@@ -493,6 +503,7 @@ export default function App() {
             modulateTo: targetKey,
             modulateFromKey: fromKey,
             modulateRole: isLast ? 'arrival' : 'setup',
+            voicing: nodeVoicing(source),
             isStart: false,
             mode: 'build',
             targetSymbol: '',
@@ -557,12 +568,19 @@ export default function App() {
   }, [selectedNodeId, nodes, edges, setNodes, setEdges])
 
   const handlePlay = useCallback(() => {
-    playProgression(progressionPath(nodes, edges))
+    const steps = progressionPath(nodes, edges)
+    if (!steps.length) return
+    stopProgression()
+    setPlayingNodeId(null)
+    playProgression(steps, {
+      onStep: (_i, step) => setPlayingNodeId(step?.id ?? null),
+      onDone: () => setPlayingNodeId(null),
+    })
   }, [nodes, edges])
 
   const handleExportMidi = useCallback(() => {
-    const path = progressionPath(nodes, edges)
-    downloadMidi(path, midiFilenameFromChords(path))
+    const steps = progressionPath(nodes, edges)
+    downloadMidi(steps, midiFilenameFromChords(steps.map((s) => s.chord)))
   }, [nodes, edges])
 
   const applyLoadedProject = useCallback(
@@ -576,10 +594,6 @@ export default function App() {
         })),
       )
       if (project.draftKey) setDraftKey(project.draftKey)
-      if (typeof project.balancedVoicing === 'boolean') {
-        setBalancedVoicingState(project.balancedVoicing)
-        setBalancedVoicing(project.balancedVoicing)
-      }
       setSelectedNodeId(project.selectedNodeId || null)
       syncIdCounterFromNodes(loadedNodes)
       if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
@@ -594,14 +608,13 @@ export default function App() {
         nodes: serializeNodes(nodes),
         edges: serializeEdges(edges),
         draftKey,
-        balancedVoicing,
         selectedNodeId,
         idCounter,
       },
       projectFilenameFromNodes(nodes),
     )
     setSaveStatus('Downloaded')
-  }, [nodes, edges, draftKey, balancedVoicing, selectedNodeId])
+  }, [nodes, edges, draftKey, selectedNodeId])
 
   const handleLoadFile = useCallback(
     async (file) => {
@@ -612,7 +625,6 @@ export default function App() {
           nodes: serializeNodes(project.nodes || []),
           edges: serializeEdges(project.edges || []),
           draftKey: project.draftKey,
-          balancedVoicing: project.balancedVoicing,
           selectedNodeId: project.selectedNodeId,
           idCounter: project.idCounter,
         })
@@ -634,34 +646,19 @@ export default function App() {
     setResetOpen(false)
   }, [setNodes, setEdges])
 
-  const handleLoopToStart = useCallback(() => {
-    if (!selectedNodeId || !startId || selectedNodeId === startId) return
-    const exists = edges.some((e) => e.source === selectedNodeId && e.target === startId)
-    if (exists) return
-    setEdges((eds) => {
-      const next = [
-        ...eds,
-        {
-          id: `e-${selectedNodeId}-${startId}-loop`,
-          source: selectedNodeId,
-          target: startId,
-          ...defaultEdgeOptions,
-          animated: true,
+  const pathSteps = useMemo(() => progressionPath(nodes, edges), [nodes, edges])
+  const canPlay = pathSteps.length > 0
+  const displayNodes = useMemo(
+    () =>
+      enrichNodes(nodes, edges).map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          playing: n.id === playingNodeId,
         },
-      ]
-      setNodes((nds) => enrichNodes(nds, next))
-      return next
-    })
-  }, [selectedNodeId, startId, edges, setEdges, setNodes])
-
-  const pathChords = useMemo(() => progressionPath(nodes, edges), [nodes, edges])
-  const canPlay = pathChords.length > 0
-  const canLoopToStart =
-    Boolean(selectedNode) &&
-    !selectedNode.data?.isStart &&
-    mode === 'build' &&
-    Boolean(startId)
-  const displayNodes = useMemo(() => enrichNodes(nodes, edges), [nodes, edges])
+      })),
+    [nodes, edges, playingNodeId],
+  )
 
   const paletteKey = hasStart
     ? selectedNode?.data?.key || selectedNode?.data?.modulateTo || draftKey
@@ -687,9 +684,7 @@ export default function App() {
         canPlay={canPlay}
         canExport={canPlay}
         canSave={hasStart}
-        balancedVoicing={balancedVoicing}
         saveStatus={saveStatus}
-        onToggleVoicing={handleToggleVoicing}
         onAddNode={handleAddNode}
         onDelete={handleDelete}
         onPlay={handlePlay}
@@ -731,6 +726,7 @@ export default function App() {
         <ChordPalette
           onPick={handlePickChord}
           disabled={false}
+          voicing={selectedVoicing}
           showKeyPicker={
             !hasStart ||
             Boolean(selectedNode && selectedNode.data?.intent !== 'modulate')
@@ -816,11 +812,11 @@ export default function App() {
           intent={intent}
           modulateTo={modulateTo}
           modulateRole={modulateRole}
+          voicing={selectedVoicing}
+          onVoicingChange={handleVoicingChange}
           onAssign={assignChordToSelected}
           onClearChord={handleClearChord}
           onPlay={handlePlay}
-          onLoopToStart={handleLoopToStart}
-          canLoopToStart={canLoopToStart}
           onStayInKey={handleStayInKey}
           onOpenModulate={() => setModulateOpen(true)}
         />

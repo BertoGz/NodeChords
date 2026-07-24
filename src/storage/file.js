@@ -32,7 +32,7 @@ export function parseProjectFile(text) {
   }
 
   if (!data || typeof data !== 'object') {
-    throw new Error('That file does not look like a Chord Builder project.')
+    throw new Error('That file does not look like a NodeChords project.')
   }
 
   // Accept our export format or a raw autosave-shaped object
@@ -46,7 +46,6 @@ export function parseProjectFile(text) {
     nodes,
     edges,
     draftKey: data.draftKey ?? null,
-    balancedVoicing: data.balancedVoicing,
     selectedNodeId: data.selectedNodeId ?? null,
     idCounter: data.idCounter ?? null,
   }
