@@ -5,16 +5,25 @@ export default function Toolbar({
   canAddNode,
   canDelete,
   canPlay,
+  isPlaying,
+  canRestart,
   canExport,
   canSave,
   saveStatus,
+  viewMode = 'graph',
+  bpm = 120,
+  metronomeEnabled = true,
   onAddNode,
   onDelete,
-  onPlay,
+  onTogglePlay,
+  onRestart,
   onExportMidi,
   onSaveFile,
   onLoadFile,
   onReset,
+  onViewModeChange,
+  onBpmChange,
+  onToggleMetronome,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
@@ -43,14 +52,77 @@ export default function Toolbar({
         {saveStatus && <span className="toolbar__save">{saveStatus}</span>}
       </div>
       <div className="toolbar__actions">
+        <div className="view-switch" role="group" aria-label="View">
+          <button
+            type="button"
+            className={`view-switch__btn ${viewMode === 'graph' ? 'is-active' : ''}`}
+            onClick={() => onViewModeChange?.('graph')}
+          >
+            Graph
+          </button>
+          <button
+            type="button"
+            className={`view-switch__btn ${viewMode === 'timing' ? 'is-active' : ''}`}
+            onClick={() => onViewModeChange?.('timing')}
+          >
+            Timing
+          </button>
+        </div>
+
         <button type="button" className="btn" disabled={!canAddNode} onClick={onAddNode}>
           Add node
         </button>
         <button type="button" className="btn btn--ghost" disabled={!canDelete} onClick={onDelete}>
           Delete
         </button>
-        <button type="button" className="btn btn--accent" disabled={!canPlay} onClick={onPlay}>
-          Play progression
+
+        <div className="transport" role="group" aria-label="Transport">
+          <button
+            type="button"
+            className="btn btn--transport"
+            disabled={!canRestart}
+            title="Restart (playhead to start)"
+            aria-label="Restart"
+            onClick={onRestart}
+          >
+            <span className="transport__icon" aria-hidden>
+              ⏮
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`btn btn--transport btn--accent ${isPlaying ? 'is-playing' : ''}`}
+            disabled={!canPlay}
+            title={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            onClick={onTogglePlay}
+          >
+            <span className="transport__icon" aria-hidden>
+              {isPlaying ? '❚❚' : '▶'}
+            </span>
+          </button>
+        </div>
+
+        <label className="bpm-control" title="Project tempo">
+          <span>BPM</span>
+          <input
+            type="number"
+            min={40}
+            max={240}
+            step={1}
+            value={bpm}
+            onChange={(e) => onBpmChange?.(e.target.value)}
+          />
+        </label>
+
+        <button
+          type="button"
+          className={`btn btn--ghost metronome-toggle ${metronomeEnabled ? 'is-on' : ''}`}
+          title={metronomeEnabled ? 'Metronome on' : 'Metronome off'}
+          aria-pressed={metronomeEnabled}
+          onClick={() => onToggleMetronome?.(!metronomeEnabled)}
+        >
+          ♩ {metronomeEnabled ? 'On' : 'Off'}
         </button>
 
         <div className="file-menu" ref={menuRef}>

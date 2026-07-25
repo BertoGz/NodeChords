@@ -76,6 +76,38 @@ export function createKey(tonic, mode = 'major') {
   return { tonic: ((tonic % 12) + 12) % 12, mode }
 }
 
+const ORDINAL_SUFFIX = ['th', 'st', 'nd', 'rd']
+
+/** 1 → "1st", 2 → "2nd", … 7 → "7th" */
+export function formatOrdinal(n) {
+  const num = Number(n)
+  if (!Number.isFinite(num) || num < 1) return ''
+  const v = Math.round(num)
+  const mod100 = v % 100
+  const mod10 = v % 10
+  const suffix =
+    mod100 >= 11 && mod100 <= 13
+      ? 'th'
+      : ORDINAL_SUFFIX[mod10] || 'th'
+  return `${v}${suffix}`
+}
+
+/**
+ * Scale-degree index (1–7) of a chord's root in key, or null if outside the scale.
+ */
+export function scaleDegreeNumber(chord, key) {
+  if (!chord || !key) return null
+  const pcs = scalePitchClasses(key)
+  const idx = pcs.indexOf(((chord.root % 12) + 12) % 12)
+  return idx >= 0 ? idx + 1 : null
+}
+
+/** "2nd", "5th", … or null when the root is not in the key's scale. */
+export function scaleDegreeOrdinal(chord, key) {
+  const n = scaleDegreeNumber(chord, key)
+  return n ? formatOrdinal(n) : null
+}
+
 export function scalePitchClasses(key) {
   const mode = MODES.find((m) => m.id === key.mode) || MODES[0]
   return mode.intervals.map((i) => (key.tonic + i) % 12)

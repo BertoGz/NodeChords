@@ -1,4 +1,10 @@
 import { chordMidiNotes, DEFAULT_VOICING, formatChord } from '../theory/chords.js'
+import {
+  DEFAULT_BPM,
+  clampBpm,
+  layoutStepsInMeasures,
+  timelineBeatsFromSteps,
+} from '../theory/duration.js'
 
 function writeVarLen(value) {
   const buffer = [value & 0x7f]
@@ -15,37 +21,32 @@ function strBytes(s) {
 }
 
 /**
- * Build a Type-0 Standard MIDI File from a chord progression.
- * Each chord is one quarter note (PPQ=480).
- * @param {Array<{chord: object, voicing?: string}|object>} steps
+ * Build a Type-0 Standard MIDI File from measure + note-type layout.
+ * Empty leftover beats in a measure become rests (silence).
  */
-export function buildMidiFile(steps, { bpm = 90 } = {}) {
+export function buildMidiFile(steps, { bpm = DEFAULT_BPM } = {}) {
   const PPQ = 480
+  const safeBpm = clampBpm(bpm)
   const events = []
+  const layout = layoutStepsInMeasures(steps)
 
-  // Tempo meta (microseconds per quarter)
-  const micros = Math.round(60_000_000 / bpm)
+  const micros = Math.round(60_000_000 / safeBpm)
   events.push({
     tick: 0,
     bytes: [0xff, 0x51, 0x03, (micros >> 16) & 0xff, (micros >> 8) & 0xff, micros & 0xff],
   })
-  // Time signature 4/4
   events.push({ tick: 0, bytes: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08] })
-  // Track name
   const name = 'NodeChords'
   events.push({ tick: 0, bytes: [0xff, 0x03, name.length, ...strBytes(name)] })
-  // Program change — acoustic grand
   events.push({ tick: 0, bytes: [0xc0, 0] })
 
-  let tick = 0
-  const duration = PPQ // one quarter per chord
-
-  for (const step of steps) {
-    const chord = step?.chord ?? step
+  for (const ev of layout) {
+    const chord = ev.chord ?? ev.step?.chord
     if (!chord) continue
-    const notes = chordMidiNotes(chord, step?.voicing || DEFAULT_VOICING)
+    const tick = Math.round(ev.startBeat * PPQ)
+    const durationTicks = Math.max(1, Math.round(ev.durationBeats * PPQ))
+    const notes = chordMidiNotes(chord, ev.voicing || ev.step?.voicing || DEFAULT_VOICING)
     const label = formatChord(chord)
-    // Optional text meta for DAW visibility
     const text = `Chord: ${label}`
     events.push({
       tick,
@@ -54,16 +55,14 @@ export function buildMidiFile(steps, { bpm = 90 } = {}) {
     for (const note of notes) {
       events.push({ tick, bytes: [0x90, note, 90] })
     }
-    const offTick = tick + duration
+    const offTick = tick + durationTicks
     for (const note of notes) {
       events.push({ tick: offTick, bytes: [0x80, note, 0] })
     }
-    tick = offTick
   }
 
-  events.push({ tick, bytes: [0xff, 0x2f, 0x00] }) // end of track
-
-  // Sort by tick, stable for same-tick order (meta/notes already ordered)
+  const endTick = Math.round(timelineBeatsFromSteps(steps) * PPQ)
+  events.push({ tick: endTick, bytes: [0xff, 0x2f, 0x00] })
   events.sort((a, b) => a.tick - b.tick)
 
   const track = []
@@ -77,9 +76,9 @@ export function buildMidiFile(steps, { bpm = 90 } = {}) {
   const trackLen = track.length
   const header = [
     ...strBytes('MThd'),
-    0, 0, 0, 6, // header length
-    0, 0, // format 0
-    0, 1, // one track
+    0, 0, 0, 6,
+    0, 0,
+    0, 1,
     (PPQ >> 8) & 0xff,
     PPQ & 0xff,
     ...strBytes('MTrk'),
@@ -92,9 +91,9 @@ export function buildMidiFile(steps, { bpm = 90 } = {}) {
   return new Uint8Array([...header, ...track])
 }
 
-export function downloadMidi(steps, filename = 'chord-progression.mid') {
+export function downloadMidi(steps, filename = 'chord-progression.mid', { bpm = DEFAULT_BPM } = {}) {
   if (!steps?.length) return false
-  const data = buildMidiFile(steps)
+  const data = buildMidiFile(steps, { bpm })
   const blob = new Blob([data], { type: 'audio/midi' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

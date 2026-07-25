@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   formatChord,
   chordId,
@@ -7,7 +7,49 @@ import {
   voicingLabel,
 } from '../theory/chords.js'
 import { formatKey } from '../theory/keys.js'
+import { groupSuggestionsByFeel } from '../theory/feel.js'
 import { playChord } from '../audio/playChord.js'
+import KeyPiano from './KeyPiano.jsx'
+
+function TensionMeter({ value = 1 }) {
+  const n = Math.max(1, Math.min(5, value || 1))
+  return (
+    <span className="suggestion__tension" title={`Tension ${n} of 5`} aria-label={`Tension ${n} of 5`}>
+      {Array.from({ length: 5 }, (_, i) => (
+        <span key={i} className={`suggestion__dot ${i < n ? 'is-on' : ''}`} />
+      ))}
+    </span>
+  )
+}
+
+function SuggestionRow({ s, active, voicing, onAssign }) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={`suggestion suggestion--${s.feel || 'move'} ${active ? 'is-active' : ''}`}
+        onClick={() => {
+          playChord(s.chord, { voicing })
+          onAssign(s.chord)
+        }}
+      >
+        <span className="suggestion__headline">
+          <span className="suggestion__symbol">{s.symbol}</span>
+          {s.scaleDegree && (
+            <span className="suggestion__degree" title={`${s.scaleDegree} of the key`}>
+              {s.scaleDegree}
+            </span>
+          )}
+        </span>
+        <span className={`suggestion__tag suggestion__tag--${s.feel || 'move'}`}>
+          {s.feelLabel || s.tag}
+        </span>
+        <span className="suggestion__reason">{s.blurb || s.reason}</span>
+        <TensionMeter value={s.tension} />
+      </button>
+    </li>
+  )
+}
 
 export default function SuggestionPanel({
   selectedNode,
@@ -20,14 +62,15 @@ export default function SuggestionPanel({
   modulateRole,
   voicing = DEFAULT_VOICING,
   onAssign,
-  onPlay,
   onClearChord,
   onStayInKey,
   onOpenModulate,
   onVoicingChange,
 }) {
   const [voicingOpen, setVoicingOpen] = useState(false)
+  const [pianoOpen, setPianoOpen] = useState(false)
   const voicingRef = useRef(null)
+  const pianoRef = useRef(null)
 
   useEffect(() => {
     if (!voicingOpen) return
@@ -46,14 +89,33 @@ export default function SuggestionPanel({
   }, [voicingOpen])
 
   useEffect(() => {
+    if (!pianoOpen) return
+    const onPointer = (e) => {
+      if (!pianoRef.current?.contains(e.target)) setPianoOpen(false)
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setPianoOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointer)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [pianoOpen])
+
+  useEffect(() => {
     setVoicingOpen(false)
+    setPianoOpen(false)
   }, [selectedNode?.id])
+
+  const groups = useMemo(() => groupSuggestionsByFeel(suggestions), [suggestions])
 
   if (!selectedNode) {
     return (
       <aside className="panel">
         <h2 className="panel__title">Suggestions</h2>
-        <p className="panel__empty">Select a node to see Build, Resolve, or modulation pathways.</p>
+        <p className="panel__empty">Select a node to see what the next chord can do.</p>
       </aside>
     )
   }
@@ -61,17 +123,37 @@ export default function SuggestionPanel({
   const chord = selectedNode.data?.chord
   const isModulating = intent === 'modulate' && Boolean(modulateTo)
 
-  let title = 'Build'
-  if (mode === 'resolve') title = 'Resolve'
-  else if (isModulating) title = 'Modulate'
+  let title = 'What should the next chord do?'
+  if (mode === 'resolve') title = 'How do you want to land?'
+  else if (isModulating) {
+    title =
+      modulateRole === 'arrival' ? 'Land in the new key' : 'Bridge toward the new key'
+  }
 
   return (
     <aside className="panel">
       <header className="panel__header">
         <h2 className="panel__title">{title}</h2>
         {homeKey && (
-          <p className="panel__meta">
-            Key: <strong>{formatKey(homeKey)}</strong>
+          <p className="panel__meta panel__meta--key">
+            <span>
+              Key: <strong>{formatKey(homeKey)}</strong>
+            </span>
+            <span className="key-piano-wrap" ref={pianoRef}>
+              <button
+                type="button"
+                className={`btn-piano ${pianoOpen ? 'is-open' : ''}`}
+                aria-expanded={pianoOpen}
+                aria-haspopup="dialog"
+                title={`Show ${formatKey(homeKey)} on piano`}
+                onClick={() => setPianoOpen((open) => !open)}
+              >
+                ♩
+              </button>
+              {pianoOpen && (
+                <KeyPiano homeKey={homeKey} onClose={() => setPianoOpen(false)} />
+              )}
+            </span>
           </p>
         )}
         {mode === 'resolve' && targetChord && (
@@ -80,13 +162,15 @@ export default function SuggestionPanel({
           </p>
         )}
         {mode === 'build' && !isModulating && (
-          <p className="panel__meta">Click a chord to set it on the selected node</p>
+          <p className="panel__meta">
+            Pick by feel — Home settles, Move continues, Tighten pulls, Color spices
+          </p>
         )}
         {isModulating && (
           <p className="panel__meta">
             {modulateRole === 'arrival'
-              ? `Landing in ${formatKey(modulateTo)} — arrival chords only`
-              : `Setup toward ${formatKey(modulateTo)} — bridges & pivots`}
+              ? `Landing in ${formatKey(modulateTo)} — home chords for the new key`
+              : `Setup toward ${formatKey(modulateTo)} — bridges that pull or pivot`}
             {chord ? ' — pick another to swap' : ''}
           </p>
         )}
@@ -168,38 +252,41 @@ export default function SuggestionPanel({
         </div>
       )}
 
-      <ul className="suggestions">
+      <div className="suggestions">
         {suggestions.length === 0 && (
-          <li className="suggestions__empty">
+          <p className="suggestions__empty">
             {mode === 'resolve'
-              ? 'Cadence chords will appear here, or pick from the palette.'
+              ? 'Landing chords will appear here, or pick from the palette.'
               : isModulating
                 ? 'Bridge chords toward the target will appear here.'
                 : homeKey
-                  ? 'Diatonic chords for this key will appear here.'
+                  ? 'Suggestions for this key will appear here.'
                   : 'Choose a home key, then pick chords.'}
-          </li>
+          </p>
         )}
-        {suggestions.map((s) => {
-          const active = chord && chordId(chord) === chordId(s.chord)
-          return (
-            <li key={`${s.chord.root}-${s.chord.quality}-${s.reason}`}>
-              <button
-                type="button"
-                className={`suggestion ${active ? 'is-active' : ''}`}
-                onClick={() => {
-                  playChord(s.chord, { voicing })
-                  onAssign(s.chord)
-                }}
-              >
-                <span className="suggestion__symbol">{s.symbol}</span>
-                <span className="suggestion__reason">{s.reason}</span>
-                {s.tag && <span className="suggestion__tag">{s.tag}</span>}
-              </button>
-            </li>
-          )
-        })}
-      </ul>
+        {groups.map((group) => (
+          <section key={group.id} className="suggest-group">
+            <header className="suggest-group__head">
+              <h3 className="suggest-group__title">{group.title}</h3>
+              <p className="suggest-group__hint">{group.hint}</p>
+            </header>
+            <ul className="suggest-group__list">
+              {group.items.map((s) => {
+                const active = chord && chordId(chord) === chordId(s.chord)
+                return (
+                  <SuggestionRow
+                    key={`${s.chord.root}-${s.chord.quality}-${s.feel}-${s.reason}`}
+                    s={s}
+                    active={active}
+                    voicing={voicing}
+                    onAssign={onAssign}
+                  />
+                )
+              })}
+            </ul>
+          </section>
+        ))}
+      </div>
     </aside>
   )
 }

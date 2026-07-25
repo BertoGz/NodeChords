@@ -3,9 +3,11 @@ import { scoreBuild, scoreResolve } from './graph.js'
 import {
   diatonicChords,
   formatKey,
+  scaleDegreeOrdinal,
   scoreDiatonicBuild,
   scoreModulationBridge,
 } from './keys.js'
+import { enrichWithFeel } from './feel.js'
 
 /**
  * Ranked chord suggestions.
@@ -27,23 +29,40 @@ export function suggest({
   modulateRole = null, // 'setup' | 'arrival' | null
   limit = 16,
 } = {}) {
+  const ctx = { homeKey, mode: modulateTo ? 'modulate' : mode }
+  // Degree labels follow the key the suggestion is aiming at (target when modulating).
+  const degreeKey = modulateTo || homeKey
+
+  let results
   // Modulate: bridges toward target key
   if (mode === 'build' && modulateTo) {
-    return suggestModulation(fromChord, homeKey, modulateTo, limit, modulateRole)
+    results = enrichWithFeel(
+      suggestModulation(fromChord, homeKey, modulateTo, limit, modulateRole),
+      { ...ctx, mode: 'modulate' },
+    )
+  } else if (mode === 'build' && homeKey) {
+    // Stay in key: diatonic-first build
+    results = enrichWithFeel(suggestDiatonic(fromChord, homeKey, limit), ctx)
+  } else if (mode === 'resolve') {
+    // Resolve to start (cadence), optionally biased by start key via homeKey
+    results = enrichWithFeel(suggestResolve(fromChord, targetChord, homeKey, limit), {
+      ...ctx,
+      mode: 'resolve',
+    })
+  } else {
+    // Fallback: legacy probabilistic build
+    results = enrichWithFeel(suggestLegacyBuild(fromChord, limit), ctx)
   }
 
-  // Stay in key: diatonic-first build
-  if (mode === 'build' && homeKey) {
-    return suggestDiatonic(fromChord, homeKey, limit)
-  }
+  return attachScaleDegrees(results, degreeKey)
+}
 
-  // Resolve to start (cadence), optionally biased by start key via homeKey
-  if (mode === 'resolve') {
-    return suggestResolve(fromChord, targetChord, homeKey, limit)
-  }
-
-  // Fallback: legacy probabilistic build
-  return suggestLegacyBuild(fromChord, limit)
+function attachScaleDegrees(results, key) {
+  if (!key) return results
+  return results.map((entry) => ({
+    ...entry,
+    scaleDegree: scaleDegreeOrdinal(entry.chord, key),
+  }))
 }
 
 function suggestDiatonic(fromChord, homeKey, limit) {

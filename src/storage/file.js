@@ -48,6 +48,8 @@ export function parseProjectFile(text) {
     draftKey: data.draftKey ?? null,
     selectedNodeId: data.selectedNodeId ?? null,
     idCounter: data.idCounter ?? null,
+    bpm: data.bpm,
+    metronomeEnabled: data.metronomeEnabled,
   }
 }
 

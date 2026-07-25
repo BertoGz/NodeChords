@@ -14,6 +14,7 @@ function ChordNodeComponent({ data, selected }) {
     modulateTo,
     modulateRole,
     playing,
+    playhead,
   } = data
   const filled = Boolean(chord)
   const symbol = filled ? formatChord(chord) : '—'
@@ -44,6 +45,7 @@ function ChordNodeComponent({ data, selected }) {
         modulateRole === 'setup' ? 'chord-node--mod-step' : '',
         isStart ? 'chord-node--start' : '',
         selected ? 'chord-node--selected' : '',
+        playhead ? 'chord-node--playhead' : '',
         playing ? 'chord-node--playing' : '',
       ]
         .filter(Boolean)

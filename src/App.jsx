@@ -16,10 +16,22 @@ import ChordNode from './components/ChordNode.jsx'
 import ChordPalette from './components/ChordPalette.jsx'
 import SuggestionPanel from './components/SuggestionPanel.jsx'
 import Toolbar from './components/Toolbar.jsx'
+import TimingView from './components/TimingView.jsx'
 import ConfirmModal from './components/ConfirmModal.jsx'
 import ModulateModal from './components/ModulateModal.jsx'
 import { DEFAULT_VOICING, formatChord } from './theory/chords.js'
 import { createKey, formatKey } from './theory/keys.js'
+import {
+  DEFAULT_BPM,
+  DEFAULT_DURATION_BEATS,
+  DEFAULT_MEASURE,
+  beatsUsedInMeasure,
+  clampBpm,
+  inferMeasuresFromDurations,
+  normalizeDurationBeats,
+  normalizeMeasure,
+  suggestNextMeasure,
+} from './theory/duration.js'
 import {
   previousChord,
   previousKey,
@@ -28,7 +40,11 @@ import {
   suggest,
   suggestionModeForNode,
 } from './theory/suggest.js'
-import { playProgression, stopProgression } from './audio/playChord.js'
+import {
+  playProgression,
+  setProgressionStopHandler,
+  stopProgression,
+} from './audio/playChord.js'
 import { clearProject, createAutosave, loadProject, saveProject } from './storage/db.js'
 import {
   downloadProjectFile,
@@ -46,18 +62,24 @@ const defaultEdgeOptions = {
 }
 
 let idCounter = 1
-function nextId() {
-  idCounter += 1
-  return `n${idCounter}`
-}
 
 function syncIdCounterFromNodes(nodes) {
   let max = 1
-  for (const n of nodes) {
+  for (const n of nodes || []) {
     const m = /^n(\d+)$/.exec(n.id)
     if (m) max = Math.max(max, Number(m[1]))
   }
   idCounter = max
+}
+
+/** Mint a node id that cannot collide with existing nodes (HMR / desync safe). */
+function nextId(existingNodes) {
+  syncIdCounterFromNodes(existingNodes)
+  const used = new Set((existingNodes || []).map((n) => n.id))
+  do {
+    idCounter += 1
+  } while (used.has(`n${idCounter}`))
+  return `n${idCounter}`
 }
 
 function serializeNodes(nodes) {
@@ -88,30 +110,121 @@ function nodeVoicing(node) {
   return node?.data?.voicing || DEFAULT_VOICING
 }
 
-/** Walk from start along first outgoing edge. Returns [{ id, chord, voicing }, ...]. */
+function nodeDurationBeats(node) {
+  return normalizeDurationBeats(node?.data?.durationBeats ?? DEFAULT_DURATION_BEATS)
+}
+
+function nodeMeasure(node) {
+  return normalizeMeasure(node?.data?.measure ?? DEFAULT_MEASURE)
+}
+
+function withDurationDefaults(nodes) {
+  const list = nodes || []
+  const chordNodes = list.filter((n) => n.data?.chord)
+  const needInfer = chordNodes.some((n) => n.data?.measure == null)
+  const inferredById = new Map()
+
+  if (needInfer) {
+    const measures = inferMeasuresFromDurations(
+      chordNodes.map((n) => ({
+        id: n.id,
+        durationBeats: nodeDurationBeats(n),
+      })),
+    )
+    chordNodes.forEach((n, i) => {
+      if (n.data?.measure == null) inferredById.set(n.id, measures[i] ?? DEFAULT_MEASURE)
+    })
+  }
+
+  return list.map((n) => ({
+    ...n,
+    data: {
+      ...n.data,
+      durationBeats: nodeDurationBeats(n),
+      measure: normalizeMeasure(
+        n.data?.measure ?? inferredById.get(n.id) ?? DEFAULT_MEASURE,
+      ),
+      voicing: n.data?.voicing || DEFAULT_VOICING,
+    },
+  }))
+}
+
+function nodeIdNum(id) {
+  const m = /^n(\d+)$/.exec(id || '')
+  return m ? Number(m[1]) : 0
+}
+
+/**
+ * Prefer the newest forward child (highest n# id).
+ * Skips loop-backs to Start and already-visited nodes.
+ */
+function nextForward(sourceId, startId, nodes, edges, visited) {
+  const candidates = edges
+    .filter((e) => e.source === sourceId && e.target !== startId && !visited.has(e.target))
+    .map((e) => {
+      const node = nodes.find((n) => n.id === e.target)
+      return node ? { edge: e, node } : null
+    })
+    .filter(Boolean)
+    .sort((a, b) => nodeIdNum(b.node.id) - nodeIdNum(a.node.id))
+
+  return candidates[0] || null
+}
+
+/**
+ * Walk forward from start. Returns [{ id, chord, voicing }, ...].
+ * When a node has multiple outgoing edges, follow the newest branch.
+ */
 function progressionPath(nodes, edges) {
   const start = nodes.find((n) => n.data?.isStart)
   const startChordValue = nodeChord(start)
   if (!startChordValue) return []
 
-  const steps = [{ id: start.id, chord: startChordValue, voicing: nodeVoicing(start) }]
+  const steps = [
+    {
+      id: start.id,
+      chord: startChordValue,
+      voicing: nodeVoicing(start),
+      durationBeats: nodeDurationBeats(start),
+      measure: nodeMeasure(start),
+    },
+  ]
   const visited = new Set([start.id])
   let current = start.id
 
   while (true) {
-    const out = edges.find((e) => e.source === current)
-    if (!out) break
-    if (out.target === start.id) break
-    if (visited.has(out.target)) break
-    visited.add(out.target)
-    const next = nodes.find((n) => n.id === out.target)
-    const chord = nodeChord(next)
+    const next = nextForward(current, start.id, nodes, edges, visited)
+    if (!next) break
+    visited.add(next.node.id)
+    const chord = nodeChord(next.node)
     if (!chord) break
-    steps.push({ id: next.id, chord, voicing: nodeVoicing(next) })
-    current = out.target
+    steps.push({
+      id: next.node.id,
+      chord,
+      voicing: nodeVoicing(next.node),
+      durationBeats: nodeDurationBeats(next.node),
+      measure: nodeMeasure(next.node),
+    })
+    current = next.node.id
   }
 
   return steps
+}
+
+/** Last node on the newest forward chain from Start (includes empty tip nodes). */
+function progressionTip(nodes, edges) {
+  const start = nodes.find((n) => n.data?.isStart)
+  if (!start) return null
+
+  const visited = new Set([start.id])
+  let current = start
+
+  while (true) {
+    const next = nextForward(current.id, start.id, nodes, edges, visited)
+    if (!next) return current
+    visited.add(next.node.id)
+    current = next.node
+  }
 }
 
 function enrichNodes(nodes, edges) {
@@ -151,8 +264,36 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState('')
   const [resetOpen, setResetOpen] = useState(false)
   const [modulateOpen, setModulateOpen] = useState(false)
-  const [playingNodeId, setPlayingNodeId] = useState(null)
+  const [playheadNodeId, setPlayheadNodeId] = useState(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [viewMode, setViewMode] = useState('graph')
+  const [bpm, setBpm] = useState(DEFAULT_BPM)
+  const [metronomeEnabled, setMetronomeEnabled] = useState(true)
+  const isPlayingRef = useRef(false)
+  const playheadAtEndRef = useRef(false)
   const autosaveRef = useRef(null)
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+  const flowRef = useRef(null)
+
+  useEffect(() => {
+    nodesRef.current = nodes
+  }, [nodes])
+
+  useEffect(() => {
+    edgesRef.current = edges
+  }, [edges])
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+  }, [isPlaying])
+
+  useEffect(() => {
+    setProgressionStopHandler(() => {
+      setIsPlaying(false)
+    })
+    return () => setProgressionStopHandler(null)
+  }, [])
 
   useEffect(() => {
     autosaveRef.current = createAutosave(async (payload) => {
@@ -168,7 +309,10 @@ export default function App() {
         const project = await loadProject()
         if (cancelled) return
         if (project) {
-          const loadedNodes = enrichNodes(project.nodes || [], project.edges || [])
+          const loadedNodes = enrichNodes(
+            withDurationDefaults(project.nodes || []),
+            project.edges || [],
+          )
           setNodes(loadedNodes)
           setEdges(
             (project.edges || []).map((e) => ({
@@ -178,6 +322,10 @@ export default function App() {
           )
           if (project.draftKey) setDraftKey(project.draftKey)
           if (project.selectedNodeId) setSelectedNodeId(project.selectedNodeId)
+          if (project.bpm != null) setBpm(clampBpm(project.bpm))
+          if (typeof project.metronomeEnabled === 'boolean') {
+            setMetronomeEnabled(project.metronomeEnabled)
+          }
           syncIdCounterFromNodes(loadedNodes)
           if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
           setSaveStatus('Restored')
@@ -202,8 +350,10 @@ export default function App() {
       draftKey,
       selectedNodeId,
       idCounter,
+      bpm,
+      metronomeEnabled,
     })
-  }, [nodes, edges, draftKey, selectedNodeId, hydrated])
+  }, [nodes, edges, draftKey, selectedNodeId, bpm, metronomeEnabled, hydrated])
 
   const startId = useMemo(() => startNodeId(nodes), [nodes])
   const hasStart = Boolean(startId)
@@ -269,25 +419,81 @@ export default function App() {
 
   const onConnect = useCallback(
     (connection) => {
-      setEdges((eds) => {
-        const next = addEdge(
-          {
-            ...connection,
-            ...defaultEdgeOptions,
-            id: `e-${connection.source}-${connection.target}-${eds.length}`,
-          },
-          eds,
-        )
-        setNodes((nds) => enrichNodes(nds, next))
-        return next
-      })
+      const eds = edgesRef.current
+      const next = addEdge(
+        {
+          ...connection,
+          ...defaultEdgeOptions,
+          id: `e-${connection.source}-${connection.target}-${eds.length}`,
+        },
+        eds,
+      )
+      const nextNodes = enrichNodes(nodesRef.current, next)
+      edgesRef.current = next
+      nodesRef.current = nextNodes
+      setEdges(next)
+      setNodes(nextNodes)
     },
     [setEdges, setNodes],
   )
 
-  const onSelectionChange = useCallback(({ nodes: sel }) => {
-    setSelectedNodeId(sel[0]?.id ?? null)
-  }, [])
+  const centerOnNode = useCallback(
+    (nodeId) => {
+      if (!nodeId || viewMode !== 'graph') return
+      // Wait a frame so React Flow has mounted and measured the new node.
+      requestAnimationFrame(() => {
+        const flow = flowRef.current
+        const node = flow?.getNode(nodeId)
+        if (!node) return
+        const width = node.measured?.width ?? node.width ?? 140
+        const height = node.measured?.height ?? node.height ?? 84
+        flow.setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+          zoom: flow.getZoom(),
+          duration: 420,
+        })
+      })
+    },
+    [viewMode],
+  )
+
+  const startPlayback = useCallback(
+    (fromIndex) => {
+      const steps = progressionPath(nodes, edges)
+      if (!steps.length) return
+      const start = Math.max(0, Math.min(fromIndex, steps.length - 1))
+      playheadAtEndRef.current = false
+      setIsPlaying(true)
+      playProgression(steps, {
+        fromIndex: start,
+        bpm,
+        metronome: metronomeEnabled,
+        onStep: (_i, step) => {
+          playheadAtEndRef.current = false
+          setPlayheadNodeId(step?.id ?? null)
+        },
+        onDone: () => {
+          playheadAtEndRef.current = true
+          setIsPlaying(false)
+        },
+      })
+    },
+    [nodes, edges, bpm, metronomeEnabled],
+  )
+
+  const onSelectionChange = useCallback(
+    ({ nodes: sel }) => {
+      const id = sel[0]?.id ?? null
+      setSelectedNodeId((prev) => (prev === id ? prev : id))
+      if (!id) return
+      const steps = progressionPath(nodes, edges)
+      const idx = steps.findIndex((s) => s.id === id)
+      if (idx < 0) return
+      playheadAtEndRef.current = false
+      setPlayheadNodeId((prev) => (prev === id ? prev : id))
+      if (isPlayingRef.current) startPlayback(idx)
+    },
+    [nodes, edges, startPlayback],
+  )
 
   const assignChordToSelected = useCallback(
     (chord) => {
@@ -345,6 +551,8 @@ export default function App() {
             intent: 'stay',
             modulateTo: null,
             voicing: DEFAULT_VOICING,
+            durationBeats: DEFAULT_DURATION_BEATS,
+            measure: DEFAULT_MEASURE,
             isStart: true,
             mode: null,
             targetSymbol: '',
@@ -354,6 +562,8 @@ export default function App() {
         setNodes([start])
         setEdges([])
         setSelectedNodeId('n1')
+        setPlayheadNodeId('n1')
+        playheadAtEndRef.current = false
         return
       }
 
@@ -365,49 +575,70 @@ export default function App() {
 
   const handleAddNode = useCallback(() => {
     if (!hasStart) return
-    const sourceId = selectedNodeId || startId
-    const source = nodes.find((n) => n.id === sourceId)
+
+    // Keep this outside setState updaters — Strict Mode double-invokes them
+    // in dev, which would mint two ids / create two nodes.
+    const nds = nodesRef.current
+    const eds = edgesRef.current
+    const source =
+      progressionTip(nds, eds) ||
+      nds.find((n) => n.data?.isStart) ||
+      nds.find((n) => n.id === startId)
     if (!source) return
 
+    const sourceId = source.id
     const inheritedKey = source.data?.key ?? draftKey
     const inheritedVoicing = nodeVoicing(source)
-    const id = nextId()
+    const inheritedBeats = nodeDurationBeats(source)
+    const path = progressionPath(nds, eds)
+    const usedInPrev = beatsUsedInMeasure(path, nodeMeasure(source))
+    const measure = suggestNextMeasure(nodeMeasure(source), usedInPrev, inheritedBeats)
+    const id = nextId(nds)
     const newNode = {
       id,
       type: 'chord',
       position: {
         x: source.position.x + 220,
-        y: source.position.y + (nodes.length % 2 === 0 ? 40 : -40),
+        y: source.position.y + (nds.length % 2 === 0 ? 40 : -40),
       },
       data: {
-        chord: null,
+        chord: source.data?.chord ? { ...source.data.chord } : null,
         key: inheritedKey,
         intent: 'stay',
         modulateTo: null,
         modulateFromKey: null,
         modulateRole: null,
         voicing: inheritedVoicing,
+        durationBeats: inheritedBeats,
+        measure,
         isStart: false,
         mode: 'build',
         targetSymbol: '',
       },
+      selected: true,
     }
 
-    setEdges((eds) => {
-      const nextEdges = [
-        ...eds,
-        {
-          id: `e-${sourceId}-${id}`,
-          source: sourceId,
-          target: id,
-          ...defaultEdgeOptions,
-        },
-      ]
-      setNodes((nds) => enrichNodes([...nds, newNode], nextEdges))
-      return nextEdges
-    })
+    const nextEdges = [
+      ...eds,
+      {
+        id: `e-${sourceId}-${id}`,
+        source: sourceId,
+        target: id,
+        ...defaultEdgeOptions,
+      },
+    ]
+    const nextNodes = enrichNodes(
+      [...nds.map((n) => ({ ...n, selected: false })), newNode],
+      nextEdges,
+    )
+
+    nodesRef.current = nextNodes
+    edgesRef.current = nextEdges
+    setEdges(nextEdges)
+    setNodes(nextNodes)
     setSelectedNodeId(id)
-  }, [hasStart, selectedNodeId, startId, nodes, draftKey, setNodes, setEdges])
+    centerOnNode(id)
+  }, [hasStart, startId, draftKey, setNodes, setEdges, centerOnNode])
 
   const handleClearChord = useCallback(() => {
     if (!selectedNodeId) return
@@ -445,6 +676,49 @@ export default function App() {
     [selectedNodeId, setNodes],
   )
 
+  const handleDurationChange = useCallback(
+    (nodeId, beats) => {
+      if (!nodeId) return
+      const durationBeats = normalizeDurationBeats(beats)
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, durationBeats } } : n,
+        ),
+      )
+    },
+    [setNodes],
+  )
+
+  const handleMeasureChange = useCallback(
+    (nodeId, measure) => {
+      if (!nodeId) return
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, measure: normalizeMeasure(measure) } }
+            : n,
+        ),
+      )
+    },
+    [setNodes],
+  )
+
+  const handleSelectTimingStep = useCallback(
+    (id) => {
+      if (!id) return
+      playheadAtEndRef.current = false
+      setSelectedNodeId(id)
+      setPlayheadNodeId(id)
+      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
+      if (isPlayingRef.current) {
+        const steps = progressionPath(nodesRef.current, edgesRef.current)
+        const idx = steps.findIndex((s) => s.id === id)
+        if (idx >= 0) startPlayback(idx)
+      }
+    },
+    [setNodes, startPlayback],
+  )
+
   const handleStayInKey = useCallback(() => {
     if (!selectedNodeId) return
     setNodes((nds) => {
@@ -468,26 +742,28 @@ export default function App() {
   const handleStartModulate = useCallback(
     ({ key: targetKey, setupLength }) => {
       if (!selectedNodeId || !targetKey) return
-      const source = nodes.find((n) => n.id === selectedNodeId)
+      const source = nodesRef.current.find((n) => n.id === selectedNodeId)
       if (!source) return
 
       const fromKey = source.data?.modulateFromKey || source.data?.key || draftKey
       const length = Math.min(3, Math.max(1, setupLength || 1))
+      const nds = nodesRef.current
+      const eds = edgesRef.current
 
-      const chainIds = [selectedNodeId]
+      const allocated = []
       for (let i = 1; i < length; i++) {
-        chainIds.push(nextId())
+        allocated.push(
+          nextId([...nds, ...allocated.map((cid) => ({ id: cid }))]),
+        )
       }
+      const chainIds = [selectedNodeId, ...allocated]
 
       const newNodes = []
       const newEdges = []
       for (let i = 1; i < length; i++) {
         const id = chainIds[i]
         const prevId = chainIds[i - 1]
-        const prevPos =
-          i === 1
-            ? source.position
-            : newNodes[i - 2].position
+        const prevPos = i === 1 ? source.position : newNodes[i - 2].position
         const isLast = i === length - 1
         newNodes.push({
           id,
@@ -504,6 +780,8 @@ export default function App() {
             modulateFromKey: fromKey,
             modulateRole: isLast ? 'arrival' : 'setup',
             voicing: nodeVoicing(source),
+            durationBeats: nodeDurationBeats(source),
+            measure: nodeMeasure(source),
             isStart: false,
             mode: 'build',
             targetSymbol: '',
@@ -517,38 +795,41 @@ export default function App() {
         })
       }
 
-      setEdges((eds) => {
-        const nextEdges = [...eds, ...newEdges]
-        setNodes((nds) => {
-          const updated = nds.map((n) => {
-            if (n.id !== selectedNodeId) return n
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                intent: 'modulate',
-                modulateTo: targetKey,
-                modulateFromKey: fromKey,
-                modulateRole: length === 1 ? 'arrival' : 'setup',
-                key: length === 1 ? targetKey : fromKey,
-              },
-            }
-          })
-          return enrichNodes([...updated, ...newNodes], nextEdges)
-        })
-        return nextEdges
+      const nextEdges = [...eds, ...newEdges]
+      const updated = nds.map((n) => {
+        if (n.id !== selectedNodeId) return n
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            intent: 'modulate',
+            modulateTo: targetKey,
+            modulateFromKey: fromKey,
+            modulateRole: length === 1 ? 'arrival' : 'setup',
+            key: length === 1 ? targetKey : fromKey,
+          },
+        }
       })
-
+      const nextNodes = enrichNodes([...updated, ...newNodes], nextEdges)
+      nodesRef.current = nextNodes
+      edgesRef.current = nextEdges
+      setEdges(nextEdges)
+      setNodes(nextNodes)
       setSelectedNodeId(selectedNodeId)
       setModulateOpen(false)
+      centerOnNode(newNodes[newNodes.length - 1]?.id ?? selectedNodeId)
     },
-    [selectedNodeId, nodes, draftKey, setNodes, setEdges],
+    [selectedNodeId, draftKey, setNodes, setEdges, centerOnNode],
   )
 
   const handleDelete = useCallback(() => {
     if (!selectedNodeId) return
     const node = nodes.find((n) => n.id === selectedNodeId)
     if (node?.data?.isStart) {
+      stopProgression({ silent: true })
+      setIsPlaying(false)
+      setPlayheadNodeId(null)
+      playheadAtEndRef.current = false
       setNodes([])
       setEdges([])
       setSelectedNodeId(null)
@@ -567,25 +848,47 @@ export default function App() {
     setSelectedNodeId(null)
   }, [selectedNodeId, nodes, edges, setNodes, setEdges])
 
-  const handlePlay = useCallback(() => {
+  const handleTogglePlay = useCallback(() => {
+    if (isPlaying) {
+      stopProgression({ silent: true })
+      setIsPlaying(false)
+      return
+    }
+
     const steps = progressionPath(nodes, edges)
     if (!steps.length) return
-    stopProgression()
-    setPlayingNodeId(null)
-    playProgression(steps, {
-      onStep: (_i, step) => setPlayingNodeId(step?.id ?? null),
-      onDone: () => setPlayingNodeId(null),
-    })
+
+    let fromIndex = 0
+    if (playheadAtEndRef.current) {
+      fromIndex = 0
+    } else if (playheadNodeId) {
+      const idx = steps.findIndex((s) => s.id === playheadNodeId)
+      fromIndex = idx >= 0 ? idx : 0
+    }
+
+    startPlayback(fromIndex)
+  }, [isPlaying, nodes, edges, playheadNodeId, startPlayback])
+
+  const handleRestart = useCallback(() => {
+    const steps = progressionPath(nodes, edges)
+    const startIdLocal = steps[0]?.id ?? null
+    stopProgression({ silent: true })
+    playheadAtEndRef.current = false
+    setIsPlaying(false)
+    setPlayheadNodeId(startIdLocal)
   }, [nodes, edges])
 
   const handleExportMidi = useCallback(() => {
     const steps = progressionPath(nodes, edges)
-    downloadMidi(steps, midiFilenameFromChords(steps.map((s) => s.chord)))
-  }, [nodes, edges])
+    downloadMidi(steps, midiFilenameFromChords(steps.map((s) => s.chord)), { bpm })
+  }, [nodes, edges, bpm])
 
   const applyLoadedProject = useCallback(
     (project) => {
-      const loadedNodes = enrichNodes(project.nodes || [], project.edges || [])
+      const loadedNodes = enrichNodes(
+        withDurationDefaults(project.nodes || []),
+        project.edges || [],
+      )
       setNodes(loadedNodes)
       setEdges(
         (project.edges || []).map((e) => ({
@@ -595,6 +898,10 @@ export default function App() {
       )
       if (project.draftKey) setDraftKey(project.draftKey)
       setSelectedNodeId(project.selectedNodeId || null)
+      if (project.bpm != null) setBpm(clampBpm(project.bpm))
+      if (typeof project.metronomeEnabled === 'boolean') {
+        setMetronomeEnabled(project.metronomeEnabled)
+      }
       syncIdCounterFromNodes(loadedNodes)
       if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
       setSaveStatus('Loaded')
@@ -610,11 +917,13 @@ export default function App() {
         draftKey,
         selectedNodeId,
         idCounter,
+        bpm,
+        metronomeEnabled,
       },
       projectFilenameFromNodes(nodes),
     )
     setSaveStatus('Downloaded')
-  }, [nodes, edges, draftKey, selectedNodeId])
+  }, [nodes, edges, draftKey, selectedNodeId, bpm, metronomeEnabled])
 
   const handleLoadFile = useCallback(
     async (file) => {
@@ -622,11 +931,16 @@ export default function App() {
         const project = await readProjectFile(file)
         applyLoadedProject(project)
         await saveProject({
-          nodes: serializeNodes(project.nodes || []),
+          nodes: serializeNodes(withDurationDefaults(project.nodes || [])),
           edges: serializeEdges(project.edges || []),
           draftKey: project.draftKey,
           selectedNodeId: project.selectedNodeId,
           idCounter: project.idCounter,
+          bpm: project.bpm != null ? clampBpm(project.bpm) : DEFAULT_BPM,
+          metronomeEnabled:
+            typeof project.metronomeEnabled === 'boolean'
+              ? project.metronomeEnabled
+              : true,
         })
       } catch (err) {
         console.error(err)
@@ -637,9 +951,16 @@ export default function App() {
   )
 
   const handleReset = useCallback(() => {
+    stopProgression({ silent: true })
+    setIsPlaying(false)
+    setPlayheadNodeId(null)
+    playheadAtEndRef.current = false
     setNodes([])
     setEdges([])
     setSelectedNodeId(null)
+    setBpm(DEFAULT_BPM)
+    setMetronomeEnabled(true)
+    setViewMode('graph')
     idCounter = 1
     clearProject().catch(() => {})
     setSaveStatus('Cleared')
@@ -648,16 +969,30 @@ export default function App() {
 
   const pathSteps = useMemo(() => progressionPath(nodes, edges), [nodes, edges])
   const canPlay = pathSteps.length > 0
+
+  // Keep playhead on a valid path node when the graph changes
+  useEffect(() => {
+    if (!pathSteps.length) {
+      setPlayheadNodeId(null)
+      return
+    }
+    if (!playheadNodeId || !pathSteps.some((s) => s.id === playheadNodeId)) {
+      setPlayheadNodeId(pathSteps[0].id)
+      playheadAtEndRef.current = false
+    }
+  }, [pathSteps, playheadNodeId])
+
   const displayNodes = useMemo(
     () =>
       enrichNodes(nodes, edges).map((n) => ({
         ...n,
         data: {
           ...n.data,
-          playing: n.id === playingNodeId,
+          playhead: n.id === playheadNodeId,
+          playing: isPlaying && n.id === playheadNodeId,
         },
       })),
-    [nodes, edges, playingNodeId],
+    [nodes, edges, playheadNodeId, isPlaying],
   )
 
   const paletteKey = hasStart
@@ -682,16 +1017,25 @@ export default function App() {
         canAddNode={hasStart}
         canDelete={Boolean(selectedNodeId)}
         canPlay={canPlay}
+        isPlaying={isPlaying}
+        canRestart={canPlay}
         canExport={canPlay}
         canSave={hasStart}
         saveStatus={saveStatus}
+        viewMode={viewMode}
+        bpm={bpm}
+        metronomeEnabled={metronomeEnabled}
         onAddNode={handleAddNode}
         onDelete={handleDelete}
-        onPlay={handlePlay}
+        onTogglePlay={handleTogglePlay}
+        onRestart={handleRestart}
         onExportMidi={handleExportMidi}
         onSaveFile={handleSaveFile}
         onLoadFile={handleLoadFile}
         onReset={() => setResetOpen(true)}
+        onViewModeChange={setViewMode}
+        onBpmChange={(value) => setBpm(clampBpm(value))}
+        onToggleMetronome={setMetronomeEnabled}
       />
 
       <ConfirmModal
@@ -767,7 +1111,7 @@ export default function App() {
         />
 
         <main className="canvas-wrap">
-          {!hasStart && (
+          {!hasStart && viewMode === 'graph' && (
             <div className="canvas-empty">
               <p className="canvas-empty__lead">Start with a home key.</p>
               <p className="canvas-empty__sub">
@@ -776,31 +1120,46 @@ export default function App() {
               </p>
             </div>
           )}
-          <ReactFlow
-            nodes={displayNodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onSelectionChange={onSelectionChange}
-            nodeTypes={nodeTypes}
-            defaultEdgeOptions={defaultEdgeOptions}
-            fitView
-            fitViewOptions={{ padding: 0.35 }}
-            selectionMode={SelectionMode.Partial}
-            deleteKeyCode={null}
-            proOptions={{ hideAttribution: true }}
-            colorMode="light"
-          >
-            <Background gap={22} size={1} color="rgba(40, 32, 24, 0.08)" />
-            <Controls showInteractive={false} />
-            <MiniMap
-              nodeStrokeWidth={2}
-              pannable
-              zoomable
-              maskColor="rgba(28, 24, 20, 0.12)"
+          {viewMode === 'timing' ? (
+            <TimingView
+              steps={pathSteps}
+              selectedNodeId={selectedNodeId}
+              playheadNodeId={playheadNodeId}
+              isPlaying={isPlaying}
+              onSelectStep={handleSelectTimingStep}
+              onDurationChange={handleDurationChange}
+              onMeasureChange={handleMeasureChange}
             />
-          </ReactFlow>
+          ) : (
+            <ReactFlow
+              nodes={displayNodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onSelectionChange={onSelectionChange}
+              onInit={(instance) => {
+                flowRef.current = instance
+              }}
+              nodeTypes={nodeTypes}
+              defaultEdgeOptions={defaultEdgeOptions}
+              fitView
+              fitViewOptions={{ padding: 0.35 }}
+              selectionMode={SelectionMode.Partial}
+              deleteKeyCode={null}
+              proOptions={{ hideAttribution: true }}
+              colorMode="light"
+            >
+              <Background gap={22} size={1} color="rgba(40, 32, 24, 0.08)" />
+              <Controls showInteractive={false} />
+              <MiniMap
+                nodeStrokeWidth={2}
+                pannable
+                zoomable
+                maskColor="rgba(28, 24, 20, 0.12)"
+              />
+            </ReactFlow>
+          )}
         </main>
 
         <SuggestionPanel
@@ -816,7 +1175,6 @@ export default function App() {
           onVoicingChange={handleVoicingChange}
           onAssign={assignChordToSelected}
           onClearChord={handleClearChord}
-          onPlay={handlePlay}
           onStayInKey={handleStayInKey}
           onOpenModulate={() => setModulateOpen(true)}
         />
