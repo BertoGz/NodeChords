@@ -4,21 +4,24 @@ import {
   diatonicChords,
   formatKey,
   scaleDegreeOrdinal,
-  scoreDiatonicBuild,
   scoreModulationBridge,
+  secondaryDominantChords,
 } from './keys.js'
 import { enrichWithFeel } from './feel.js'
 
 /**
- * Ranked chord suggestions.
+ * Chord suggestions for the selected node.
+ *
+ * Stay-in-key: full key map labeled by harmonic function (Home / Departure / Tension),
+ * plus secondary dominants. Resolve / modulate keep ranked bridge logic.
  *
  * @param {object} options
  * @param {object|null} options.fromChord
- * @param {'build'|'resolve'} options.mode - graph mode (loop resolve vs forward)
- * @param {object|null} options.targetChord - start chord for resolve
- * @param {object|null} options.homeKey - current key for this node
- * @param {object|null} options.modulateTo - when set, suggest bridges toward this key
- * @param {number} options.limit
+ * @param {'build'|'resolve'} options.mode
+ * @param {object|null} options.targetChord
+ * @param {object|null} options.homeKey
+ * @param {object|null} options.modulateTo
+ * @param {number} options.limit - caps resolve/modulate lists (ignored for stay-in-key map)
  */
 export function suggest({
   fromChord = null,
@@ -30,27 +33,27 @@ export function suggest({
   limit = 16,
 } = {}) {
   const ctx = { homeKey, mode: modulateTo ? 'modulate' : mode }
-  // Degree labels follow the key the suggestion is aiming at (target when modulating).
   const degreeKey = modulateTo || homeKey
 
   let results
-  // Modulate: bridges toward target key
-  if (mode === 'build' && modulateTo) {
+  if (mode === 'build' && modulateTo && modulateRole === 'arrival') {
+    // Landing node: full destination key map (same as stay-in-key)
+    results = enrichWithFeel(suggestKeyMap(modulateTo), {
+      homeKey: modulateTo,
+      mode: 'build',
+    })
+  } else if (mode === 'build' && modulateTo) {
     results = enrichWithFeel(
       suggestModulation(fromChord, homeKey, modulateTo, limit, modulateRole),
       { ...ctx, mode: 'modulate' },
     )
   } else if (mode === 'build' && homeKey) {
-    // Stay in key: diatonic-first build
-    results = enrichWithFeel(suggestDiatonic(fromChord, homeKey, limit), ctx)
+    results = enrichWithFeel(suggestKeyMap(homeKey), ctx)
   } else if (mode === 'resolve') {
-    // Resolve to start (cadence), optionally biased by start key via homeKey
     results = enrichWithFeel(suggestResolve(fromChord, targetChord, homeKey, limit), {
       ...ctx,
-      mode: 'resolve',
     })
   } else {
-    // Fallback: legacy probabilistic build
     results = enrichWithFeel(suggestLegacyBuild(fromChord, limit), ctx)
   }
 
@@ -65,49 +68,50 @@ function attachScaleDegrees(results, key) {
   }))
 }
 
-function suggestDiatonic(fromChord, homeKey, limit) {
+/**
+ * Every chord in the key (triads, 7ths, 9ths, dims) labeled by job,
+ * plus secondary dominants as tension levers.
+ */
+function suggestKeyMap(homeKey) {
   const results = []
-  const dia = diatonicChords(homeKey)
 
-  // Always include every diatonic chord (triad + 7th flavors already in list)
-  for (const entry of dia) {
-    if (fromChord && chordId(entry.chord) === chordId(fromChord)) continue
-    const { score, reason } = scoreDiatonicBuild(fromChord, entry.chord, homeKey)
+  for (const entry of diatonicChords(homeKey)) {
     results.push({
       chord: entry.chord,
       symbol: entry.symbol,
-      score,
-      reason: reason || entry.degree,
+      score: functionScore(entry.function),
+      reason: entry.reason,
       mode: 'build',
       tag: 'diatonic',
+      function: entry.function,
+      degree: entry.degree,
     })
   }
 
-  // A few chromatic color options ranked below
-  for (const candidate of allChords()) {
-    if (results.some((r) => chordId(r.chord) === chordId(candidate))) continue
-    if (fromChord && chordId(candidate) === chordId(fromChord)) continue
-    const { score, reason } = scoreDiatonicBuild(fromChord, candidate, homeKey)
-    if (score < 20) continue
+  for (const entry of secondaryDominantChords(homeKey)) {
     results.push({
-      chord: candidate,
-      symbol: formatChord(candidate),
-      score: score * 0.55,
-      reason,
+      chord: entry.chord,
+      symbol: entry.symbol,
+      score: 30,
+      reason: entry.reason,
       mode: 'build',
-      tag: 'color',
+      tag: 'secondary',
+      function: 'color',
+      degree: entry.degree,
     })
   }
 
-  results.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))
-  return results.slice(0, limit)
+  return results
+}
+
+function functionScore(fn) {
+  return { home: 3, departure: 2, tension: 1, color: 0 }[fn] ?? 1
 }
 
 function suggestModulation(fromChord, fromKey, toKey, limit, modulateRole = null) {
   const results = []
   const catalog = allChords()
 
-  // Ensure destination diatonic set + common dominants are considered
   const ensured = [
     ...diatonicChords(toKey).map((d) => d.chord),
     ...diatonicChords(fromKey || toKey).map((d) => d.chord),
@@ -137,9 +141,7 @@ function suggestModulation(fromChord, fromKey, toKey, limit, modulateRole = null
           ? 'arrival'
           : 'bridge'
 
-    // Landing nodes: only new-tonic / arrival options
     if (modulateRole === 'arrival' && tag !== 'arrival') continue
-    // Setup nodes: bridges only — no early landing on the new tonic
     if (modulateRole === 'setup' && tag === 'arrival') continue
 
     let boosted = score

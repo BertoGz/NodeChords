@@ -9,8 +9,21 @@ import {
   timelineBeatsFromSteps,
 } from '../theory/duration.js'
 
+export const METRONOME_TYPES = [
+  { id: 'click', label: 'Click', hint: 'Soft low thud' },
+  { id: 'wood', label: 'Wood', hint: 'High woodblock tick' },
+]
+
+export const DEFAULT_METRONOME_TYPE = 'click'
+
+export function normalizeMetronomeType(value) {
+  return METRONOME_TYPES.some((t) => t.id === value) ? value : DEFAULT_METRONOME_TYPE
+}
+
 let piano = null
 let clickSynth = null
+let woodSynth = null
+let woodFilter = null
 let loadPromise = null
 let started = false
 let playGeneration = 0
@@ -92,6 +105,34 @@ function ensureClick() {
   return clickSynth
 }
 
+/** Higher woodblock-ish tick (short bandpassed noise). */
+function ensureWood() {
+  if (!woodSynth) {
+    woodFilter = new Tone.Filter({
+      type: 'bandpass',
+      frequency: 2400,
+      Q: 1.8,
+    }).toDestination()
+    woodSynth = new Tone.NoiseSynth({
+      noise: { type: 'brown' },
+      envelope: { attack: 0.001, decay: 0.055, sustain: 0, release: 0.02 },
+    }).connect(woodFilter)
+    woodSynth.volume.value = 5
+  }
+  return woodSynth
+}
+
+function scheduleMetronomeClick(type, isAccent, time) {
+  if (type === 'wood') {
+    ensureWood()
+    woodFilter.frequency.setValueAtTime(isAccent ? 2800 : 2100, time)
+    woodSynth.triggerAttackRelease(0.05, time, isAccent ? 1 : 0.55)
+    return
+  }
+  const click = ensureClick()
+  click.triggerAttackRelease(isAccent ? 'C3' : 'G2', 0.05, time, isAccent ? 0.95 : 0.5)
+}
+
 async function ensureAudio() {
   if (!started) {
     await Tone.start()
@@ -110,6 +151,7 @@ async function ensureAudio() {
   }
   piano = await loadPromise
   ensureClick()
+  ensureWood()
   return piano
 }
 
@@ -136,6 +178,13 @@ export function stopProgression({ silent = false } = {}) {
   if (clickSynth) {
     try {
       clickSynth.triggerRelease()
+    } catch {
+      // ignore
+    }
+  }
+  if (woodSynth) {
+    try {
+      woodSynth.triggerRelease()
     } catch {
       // ignore
     }
@@ -170,6 +219,7 @@ export async function playProgression(
     fromIndex = 0,
     bpm = DEFAULT_BPM,
     metronome = true,
+    metronomeType = DEFAULT_METRONOME_TYPE,
     onStep = null,
     onDone = null,
   } = {},
@@ -190,7 +240,7 @@ export async function playProgression(
   const safeBpm = clampBpm(bpm)
   const beatSec = 60 / safeBpm
   const s = await ensureAudio()
-  const click = ensureClick()
+  const clickType = normalizeMetronomeType(metronomeType)
   const generation = playGeneration
   const timelineEnd = timelineBeatsFromSteps(steps)
 
@@ -227,7 +277,7 @@ export async function playProgression(
       const isAccent = beat % BEATS_PER_BAR === 0
       Tone.Transport.schedule((time) => {
         if (generation !== playGeneration) return
-        click.triggerAttackRelease(isAccent ? 'C3' : 'G2', 0.05, time, isAccent ? 0.95 : 0.5)
+        scheduleMetronomeClick(clickType, isAccent, time)
       }, local * beatSec)
     }
   }

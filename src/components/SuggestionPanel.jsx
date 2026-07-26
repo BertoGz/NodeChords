@@ -27,7 +27,7 @@ function SuggestionRow({ s, active, voicing, onAssign }) {
     <li>
       <button
         type="button"
-        className={`suggestion suggestion--${s.feel || 'move'} ${active ? 'is-active' : ''}`}
+        className={`suggestion suggestion--${s.feel || 'departure'} ${active ? 'is-active' : ''}`}
         onClick={() => {
           playChord(s.chord, { voicing })
           onAssign(s.chord)
@@ -40,9 +40,6 @@ function SuggestionRow({ s, active, voicing, onAssign }) {
               {s.scaleDegree}
             </span>
           )}
-        </span>
-        <span className={`suggestion__tag suggestion__tag--${s.feel || 'move'}`}>
-          {s.feelLabel || s.tag}
         </span>
         <span className="suggestion__reason">{s.blurb || s.reason}</span>
         <TensionMeter value={s.tension} />
@@ -62,7 +59,6 @@ export default function SuggestionPanel({
   modulateRole,
   voicing = DEFAULT_VOICING,
   onAssign,
-  onClearChord,
   onStayInKey,
   onOpenModulate,
   onVoicingChange,
@@ -114,8 +110,8 @@ export default function SuggestionPanel({
   if (!selectedNode) {
     return (
       <aside className="panel">
-        <h2 className="panel__title">Suggestions</h2>
-        <p className="panel__empty">Select a node to see what the next chord can do.</p>
+        <h2 className="panel__title">Chords in key</h2>
+        <p className="panel__empty">Select a node to see every chord for its key.</p>
       </aside>
     )
   }
@@ -123,11 +119,13 @@ export default function SuggestionPanel({
   const chord = selectedNode.data?.chord
   const isModulating = intent === 'modulate' && Boolean(modulateTo)
 
-  let title = 'What should the next chord do?'
+  let title = 'Chords in this key'
   if (mode === 'resolve') title = 'How do you want to land?'
   else if (isModulating) {
     title =
-      modulateRole === 'arrival' ? 'Land in the new key' : 'Bridge toward the new key'
+      modulateRole === 'arrival'
+        ? `Chords in ${formatKey(modulateTo)}`
+        : 'Bridge toward the new key'
   }
 
   return (
@@ -137,7 +135,7 @@ export default function SuggestionPanel({
         {homeKey && (
           <p className="panel__meta panel__meta--key">
             <span>
-              Key: <strong>{formatKey(homeKey)}</strong>
+              Current Key: <strong>{formatKey(homeKey)}</strong>
             </span>
             <span className="key-piano-wrap" ref={pianoRef}>
               <button
@@ -161,22 +159,22 @@ export default function SuggestionPanel({
             Closing the loop to <strong>{formatChord(targetChord)}</strong>
           </p>
         )}
-        {mode === 'build' && !isModulating && (
-          <p className="panel__meta">
-            Pick by feel — Home settles, Move continues, Tighten pulls, Color spices
-          </p>
-        )}
         {isModulating && (
           <p className="panel__meta">
             {modulateRole === 'arrival'
-              ? `Landing in ${formatKey(modulateTo)} — home chords for the new key`
+              ? `Landed in ${formatKey(modulateTo)} — pick any chord in the new key`
               : `Setup toward ${formatKey(modulateTo)} — bridges that pull or pivot`}
             {chord ? ' — pick another to swap' : ''}
           </p>
         )}
+        {mode === 'build' && (!isModulating || modulateRole === 'arrival') && (
+          <p className="panel__meta">
+            Labeled by job in the key — Home rests, Departure moves, Tension pulls
+          </p>
+        )}
         {chord && (
           <p className="panel__meta">
-            Current: <strong>{formatChord(chord)}</strong>
+            Current Chord: <strong>{formatChord(chord)}</strong>
           </p>
         )}
       </header>
@@ -244,11 +242,6 @@ export default function SuggestionPanel({
               </div>
             )}
           </div>
-          {!selectedNode.data?.isStart && (
-            <button type="button" className="btn btn--ghost" onClick={onClearChord}>
-              Clear chord
-            </button>
-          )}
         </div>
       )}
 
@@ -260,7 +253,7 @@ export default function SuggestionPanel({
               : isModulating
                 ? 'Bridge chords toward the target will appear here.'
                 : homeKey
-                  ? 'Suggestions for this key will appear here.'
+                  ? 'Chords for this key will appear here.'
                   : 'Choose a home key, then pick chords.'}
           </p>
         )}

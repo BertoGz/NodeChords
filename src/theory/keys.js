@@ -18,48 +18,106 @@ export const MODES = [
   { id: 'mixolydian', label: 'Mixolydian', intervals: [0, 2, 4, 5, 7, 9, 10] },
 ]
 
-/** Scale-degree triad/seventh qualities per mode (index 0 = tonic) */
+/**
+ * Scale-degree qualities per mode (index 0 = tonic).
+ * Triads + 7ths + 9ths + dims so the key map stays rich without leaving the palette.
+ */
 const MODE_DEGREE_QUALITIES = {
   major: [
-    ['maj', 'maj7'],
-    ['min', 'm7'],
-    ['min', 'm7'],
-    ['maj', 'maj7'],
-    ['maj', '7'],
-    ['min', 'm7'],
-    ['dim', 'm7b5'],
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['min', 'm7', 'm9'],
+    ['min', 'm7', 'm9'],
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['maj', '7', '9'],
+    ['min', 'm7', 'm9'],
+    ['dim', 'm7b5', 'dim7'],
   ],
   minor: [
-    ['min', 'm7'],
-    ['dim', 'm7b5'],
-    ['maj', 'maj7'],
-    ['min', 'm7'],
-    ['min', 'm7', '7'], // v often raised as V7
-    ['maj', 'maj7'],
-    ['maj', '7'],
+    ['min', 'm7', 'm9'],
+    ['dim', 'm7b5', 'dim7'],
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['min', 'm7', 'm9'],
+    ['min', 'm7', '7', '9'], // v / raised V7–V9
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['maj', '7', '9'],
   ],
   dorian: [
-    ['min', 'm7'],
-    ['min', 'm7'],
-    ['maj', 'maj7'],
-    ['maj', '7'],
-    ['min', 'm7'],
-    ['dim', 'm7b5'],
-    ['maj', 'maj7'],
+    ['min', 'm7', 'm9'],
+    ['min', 'm7', 'm9'],
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['maj', '7', '9'],
+    ['min', 'm7', 'm9'],
+    ['dim', 'm7b5', 'dim7'],
+    ['maj', 'maj7', 'maj9'],
   ],
   mixolydian: [
-    ['maj', '7'],
-    ['min', 'm7'],
-    ['dim', 'm7b5'],
-    ['maj', 'maj7'],
-    ['min', 'm7'],
-    ['min', 'm7'],
-    ['maj', 'maj7'],
+    ['maj', '7', '9'],
+    ['min', 'm7', 'm9'],
+    ['dim', 'm7b5', 'dim7'],
+    ['maj', 'maj7', 'maj9', 'add9'],
+    ['min', 'm7', 'm9'],
+    ['min', 'm7', 'm9'],
+    ['maj', 'maj7', 'maj9'],
   ],
 }
 
-const DEGREE_NAMES = ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii']
-const DEGREE_NAMES_MINOR = ['i', 'ii', 'III', 'iv', 'v', 'VI', 'VII']
+const DEGREE_NAMES = ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°']
+const DEGREE_NAMES_MINOR = ['i', 'ii°', 'III', 'iv', 'v', 'VI', 'VII']
+const DEGREE_NAMES_DORIAN = ['i', 'ii', 'III', 'IV', 'v', 'vi°', 'VII']
+const DEGREE_NAMES_MIXOLYDIAN = ['I', 'ii', 'iii°', 'IV', 'v', 'vi', 'VII']
+
+/**
+ * Default harmonic function by scale-degree index (0–6).
+ *
+ * Rules used across modes:
+ * - Tonic family → home
+ * - Perfect-5th degree with a *minor* triad (no leading tone) → home (stable pillar)
+ * - Perfect-5th degree with a *major* / dominant triad (leading tone present) → tension
+ * - Subdominant area (ii / IV / iv / VI in aeolian) → departure
+ * - Diminished chords and ♭VII modal dominants → tension
+ */
+const DEGREE_FUNCTIONS = {
+  // I iii vi home · ii IV departure · V vii° tension (leading tone)
+  major: ['home', 'departure', 'home', 'departure', 'tension', 'home', 'tension'],
+  // i III home · iv VI departure · v home (minor, no LT) · ii° + VII tension
+  minor: ['home', 'tension', 'home', 'departure', 'home', 'departure', 'tension'],
+  // i III home · ii IV departure · v home · vi° + VII tension
+  dorian: ['home', 'departure', 'home', 'departure', 'home', 'tension', 'tension'],
+  // I + v home · ii IV vi departure · iii° + VII tension
+  mixolydian: ['home', 'departure', 'tension', 'departure', 'home', 'departure', 'tension'],
+}
+
+function degreeNamesForMode(modeId) {
+  if (modeId === 'minor') return DEGREE_NAMES_MINOR
+  if (modeId === 'dorian') return DEGREE_NAMES_DORIAN
+  if (modeId === 'mixolydian') return DEGREE_NAMES_MIXOLYDIAN
+  return DEGREE_NAMES
+}
+
+const FUNCTION_BLURBS = {
+  home: 'Stable rest — feels like home in this key',
+  departure: 'Gentle motion away from home',
+  tension: 'Unstable pull that wants to resolve',
+  color: 'Outside the key — borrowed or secondary color',
+}
+
+const QUALITY_SORT = {
+  maj: 0,
+  min: 0,
+  dim: 0,
+  aug: 0,
+  maj7: 1,
+  m7: 1,
+  '7': 1,
+  m7b5: 1,
+  dim7: 2,
+  maj9: 3,
+  m9: 3,
+  '9': 3,
+  add9: 4,
+  sus2: 5,
+  sus4: 5,
+}
 
 export function keyId(key) {
   if (!key) return ''
@@ -113,10 +171,75 @@ export function scalePitchClasses(key) {
   return mode.intervals.map((i) => (key.tonic + i) % 12)
 }
 
+/** Harmonic function for a scale-degree index in this mode (degree default). */
+export function harmonicFunctionForDegree(degreeIndex, modeId = 'major') {
+  const table = DEGREE_FUNCTIONS[modeId] || DEGREE_FUNCTIONS.major
+  return table[degreeIndex] || 'departure'
+}
+
+/**
+ * Function for a specific chord in key — degree default plus quality overrides.
+ * Raised V7/V9 in minor (or any dominant-quality chord on the 5th) reads as tension.
+ * Diminished sonorities always read as tension.
+ */
+export function harmonicFunctionForChord(chord, key) {
+  if (!chord || !key) return 'departure'
+  const degreeIndex = scaleDegreeNumber(chord, key)
+  if (degreeIndex == null) return 'color'
+  const idx = degreeIndex - 1
+  let fn = harmonicFunctionForDegree(idx, key.mode)
+  const q = chord.quality
+
+  // Fully / half diminished → tension
+  if (q === 'dim' || q === 'dim7' || q === 'm7b5') return 'tension'
+
+  // Dominant 7/9 on the 5th degree = real dominant pull (e.g. raised V in minor)
+  if (idx === 4 && isDominantQuality(q)) return 'tension'
+
+  // Major triad/7th on the 5th in a mode whose default v is minor → borrowed major V
+  if (
+    idx === 4 &&
+    (key.mode === 'minor' || key.mode === 'dorian' || key.mode === 'mixolydian') &&
+    (q === 'maj' || q === 'maj7' || q === 'maj9' || q === 'add9')
+  ) {
+    return 'tension'
+  }
+
+  return fn
+}
+
+export function functionBlurb(fn) {
+  return FUNCTION_BLURBS[fn] || FUNCTION_BLURBS.departure
+}
+
+/**
+ * Plain-language role for a degree (section already names Home/Departure/Tension).
+ */
+export function degreeRoleLabel(degreeName, fn, { degreeIndex = null, quality = null } = {}) {
+  if (!degreeName) return functionBlurb(fn)
+  if (fn === 'home') {
+    if (degreeIndex === 0) return `${degreeName} — tonic rest`
+    if (degreeIndex === 4) return `${degreeName} — stable 5th`
+    return `${degreeName} — tonic family`
+  }
+  if (fn === 'departure') return `${degreeName} — gentle motion`
+  if (fn === 'tension') {
+    if (degreeIndex === 4 && isDominantQuality(quality)) {
+      return `${degreeName} — dominant pull`
+    }
+    if (degreeIndex === 6) return `${degreeName} — modal dominant`
+    if (quality === 'dim' || quality === 'dim7' || quality === 'm7b5') {
+      return `${degreeName} — diminished pull`
+    }
+    return `${degreeName} — wants resolution`
+  }
+  return `${degreeName} — outside color`
+}
+
 export function diatonicChords(key) {
   const mode = MODES.find((m) => m.id === key.mode) || MODES[0]
   const quals = MODE_DEGREE_QUALITIES[key.mode] || MODE_DEGREE_QUALITIES.major
-  const names = key.mode === 'minor' ? DEGREE_NAMES_MINOR : DEGREE_NAMES
+  const names = degreeNamesForMode(key.mode)
   const list = []
   const seen = new Set()
 
@@ -127,11 +250,59 @@ export function diatonicChords(key) {
       const id = chordId(chord)
       if (seen.has(id)) continue
       seen.add(id)
+      const fn = harmonicFunctionForChord(chord, key)
       list.push({
         chord,
         symbol: formatChord(chord),
         degree: names[degree],
+        degreeIndex: degree,
+        function: fn,
+        reason: degreeRoleLabel(names[degree], fn, { degreeIndex: degree, quality }),
         diatonic: true,
+      })
+    }
+  })
+
+  list.sort(
+    (a, b) =>
+      a.degreeIndex - b.degreeIndex ||
+      (QUALITY_SORT[a.chord.quality] ?? 9) - (QUALITY_SORT[b.chord.quality] ?? 9),
+  )
+
+  return list
+}
+
+/**
+ * Secondary dominants (V/x) toward non-tonic diatonic roots — 7ths & 9ths included.
+ * These are chromatic levers that push toward a chord in the key.
+ */
+export function secondaryDominantChords(key) {
+  if (!key) return []
+  const mode = MODES.find((m) => m.id === key.mode) || MODES[0]
+  const names = degreeNamesForMode(key.mode)
+  const diatonicIds = new Set(diatonicChords(key).map((d) => chordId(d.chord)))
+  const list = []
+  const seen = new Set()
+
+  mode.intervals.forEach((interval, degree) => {
+    if (degree === 0) return // not V/I as "secondary"
+    const targetRoot = (key.tonic + interval) % 12
+    const targetDegree = names[degree]
+    const secondaryRoot = (targetRoot + 7) % 12
+    for (const quality of ['7', '9']) {
+      const chord = { root: secondaryRoot, quality }
+      const id = chordId(chord)
+      if (seen.has(id) || diatonicIds.has(id)) continue
+      seen.add(id)
+      list.push({
+        chord,
+        symbol: formatChord(chord),
+        degree: `V/${targetDegree}`,
+        degreeIndex: degree,
+        function: 'color',
+        reason: `V/${targetDegree} · secondary dominant → ${ROOT_NAMES[targetRoot]}`,
+        diatonic: false,
+        secondary: true,
       })
     }
   })
@@ -163,11 +334,26 @@ export function fifthsDistance(a, b) {
   return Math.min(steps, 12 - steps)
 }
 
-/** Compare keys using tonic fifths distance (mode mismatch adds a little). */
+/** Semitone distance between tonics (0–6). */
+export function chromaticTonicDistance(a, b) {
+  const diff = Math.abs((((a - b) % 12) + 12) % 12)
+  return Math.min(diff, 12 - diff)
+}
+
+/** Compare keys using circle-of-fifths, with same-mode stepwise tonic shifts treated as close. */
 export function keyDistance(fromKey, toKey) {
   if (!fromKey || !toKey) return 6
   if (keyId(fromKey) === keyId(toKey)) return 0
+
   let d = fifthsDistance(fromKey.tonic, toKey.tonic)
+
+  // A Mixolydian → B Mixolydian → C Mixolydian are equal semitone steps;
+  // fifths alone ranks B→C much farther than A→B. Same-mode chromatic
+  // neighbors should stay easy to reach in the picker.
+  if (fromKey.mode === toKey.mode) {
+    d = Math.min(d, chromaticTonicDistance(fromKey.tonic, toKey.tonic))
+  }
+
   // Relative major/minor (same pitch collection neighborhood)
   if (fromKey.mode === 'major' && toKey.mode === 'minor' && toKey.tonic === (fromKey.tonic + 9) % 12) {
     d = Math.min(d, 1)

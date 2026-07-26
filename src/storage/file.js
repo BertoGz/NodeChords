@@ -50,6 +50,7 @@ export function parseProjectFile(text) {
     idCounter: data.idCounter ?? null,
     bpm: data.bpm,
     metronomeEnabled: data.metronomeEnabled,
+    metronomeType: data.metronomeType,
   }
 }
 

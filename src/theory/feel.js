@@ -1,67 +1,71 @@
-import { isDominantQuality, isMajorish, isMinorish } from './chords.js'
-import { isTonicOfKey } from './keys.js'
+import { isDominantQuality } from './chords.js'
+import { functionBlurb, harmonicFunctionForChord } from './keys.js'
 
-/** User-facing feel vocabulary for suggestions */
+/** User-facing harmonic-function vocabulary */
 export const FEELS = {
   home: {
     id: 'home',
     label: 'Home',
-    blurb: 'Settles toward the key center',
+    blurb: 'Stable rest — feels like home in this key',
   },
-  move: {
-    id: 'move',
-    label: 'Move',
-    blurb: 'Keeps the progression going',
+  departure: {
+    id: 'departure',
+    label: 'Departure',
+    blurb: 'Gentle motion away from home',
   },
-  tighten: {
-    id: 'tighten',
-    label: 'Tighten',
-    blurb: 'Adds pull and expectation',
+  tension: {
+    id: 'tension',
+    label: 'Tension',
+    blurb: 'Unstable pull that wants to resolve',
   },
   color: {
     id: 'color',
     label: 'Color',
-    blurb: 'Unexpected spice outside the safe path',
+    blurb: 'Outside the key — borrowed or secondary color',
   },
 }
 
-/** Panel section order */
+/** Panel section order — three jobs in the key, then spice */
 export const FEEL_GROUPS = [
   {
-    id: 'safe',
-    title: 'Safe next steps',
-    hint: 'Stay grounded in the key',
-    feels: ['home', 'move'],
+    id: 'home',
+    title: 'Home',
+    hint: 'Stable / consonant — rest in the key',
+    feels: ['home'],
+  },
+  {
+    id: 'departure',
+    title: 'Departure',
+    hint: 'Mild motion — leave home without full pull',
+    feels: ['departure'],
   },
   {
     id: 'tension',
-    title: 'Add tension',
-    hint: 'Create pull toward a landing',
-    feels: ['tighten'],
+    title: 'Tension',
+    hint: 'Unstable / dissonant — craving resolution',
+    feels: ['tension'],
   },
   {
     id: 'spice',
-    title: 'Spice',
-    hint: 'Borrow color or surprise the ear',
+    title: 'Color',
+    hint: 'Outside the key — secondary dominants and spice',
     feels: ['color'],
   },
 ]
 
 const PLAIN = {
-  'secondary dominant': 'Adds strong pull toward another chord',
-  'descending 5th': 'Classic forward motion',
-  'ascending 5th': 'Lifts the harmony upward',
-  stepwise: 'Smooth, stepwise root motion',
-  mediant: 'Warm sideways shift',
+  'secondary dominant': 'Secondary dominant — pushes toward another chord in the key',
   'chromatic color': 'Outside the key — spicy',
   'modal borrow': 'Borrowed color from a parallel mode',
   'tritone / chromatic color': 'Sharp tension, unexpected color',
-  'ii → V motion': 'Sets up a dominant pull',
-  'extension / recolor': 'Same root, richer color',
-  'forward motion': 'Keeps energy moving',
-  'stepwise climb': 'Climbs by step',
-  'circle-of-fifths': 'Strong functional motion',
-  'mediant color': 'Colorful sideways leap',
+  'pivot (both keys)': 'Belongs to both keys — smooth bridge',
+  'V7 of target': 'Dominant of the new key — strong pull',
+  'V of target': 'Points at the new key',
+  'ii of target': 'Sets up the new key’s dominant',
+  'new tonic': 'Lands in the new key',
+  'tritone sub → target': 'Jazzier pull into the new key',
+  'in new key': 'Already speaks the destination key',
+  bridge: 'Helps cross toward the new key',
   'V7 → I': 'Strong pull into home',
   'V → I': 'Classic dominant → home',
   'vii → I': 'Leading-tone pull into home',
@@ -72,31 +76,15 @@ const PLAIN = {
   'ii → V → I': 'Classic cadence setup',
   'tritone sub → I': 'Jazzier pull into home',
   'cadence approach': 'Helps close the loop',
-  'pivot (both keys)': 'Belongs to both keys — smooth bridge',
-  'V7 of target': 'Dominant of the new key — strong pull',
-  'V of target': 'Points at the new key',
-  'ii of target': 'Sets up the new key’s dominant',
-  'new tonic': 'Lands in the new key',
-  'tritone sub → target': 'Jazzier pull into the new key',
-  'in new key': 'Already speaks the destination key',
-  bridge: 'Helps cross toward the new key',
 }
 
 function plainReason(reason, feelId) {
   if (!reason) return FEELS[feelId]?.blurb || ''
+  // Prefer explicit key-map / degree role labels
+  if (reason.includes('·') || reason.includes('—')) return reason
   const lower = reason.toLowerCase()
   for (const [key, text] of Object.entries(PLAIN)) {
     if (lower.includes(key.toLowerCase()) || reason.includes(key)) return text
-  }
-  // Degree labels like "ii · descending 5th"
-  if (reason.includes('·')) {
-    const parts = reason.split('·').map((s) => s.trim())
-    const motion = parts[1]
-    if (motion && PLAIN[motion]) return PLAIN[motion]
-    if (motion?.includes('descending 5th')) return PLAIN['descending 5th']
-    if (motion?.includes('ascending 5th')) return PLAIN['ascending 5th']
-    if (motion?.includes('stepwise')) return PLAIN.stepwise
-    if (motion?.includes('mediant')) return PLAIN.mediant
   }
   if (/^[ivx]+$/i.test(reason.trim()) || reason.includes('in key')) {
     return FEELS[feelId]?.blurb || 'In-key harmony'
@@ -104,15 +92,20 @@ function plainReason(reason, feelId) {
   return FEELS[feelId]?.blurb || reason
 }
 
-function tensionFor(feelId, score) {
-  const base = { home: 1, move: 2, tighten: 4, color: 3 }[feelId] ?? 2
-  if (score >= 70) return Math.min(5, base + 1)
-  if (score <= 25) return Math.max(1, base - 1)
-  return base
+function tensionFor(feelId) {
+  return { home: 1, departure: 2, tension: 4, color: 3 }[feelId] ?? 2
+}
+
+/** Map legacy feel ids if anything still emits them */
+function normalizeFeel(feel) {
+  if (feel === 'move') return 'departure'
+  if (feel === 'tighten') return 'tension'
+  return feel
 }
 
 /**
- * Classify a scored suggestion into Home / Move / Tighten / Color.
+ * Classify a suggestion into Home / Departure / Tension / Color.
+ * Stay-in-key build prefers the chord's harmonic function in the key.
  */
 export function classifyFeel(entry, { homeKey = null, mode = 'build' } = {}) {
   const reason = (entry.reason || '').toLowerCase()
@@ -120,15 +113,26 @@ export function classifyFeel(entry, { homeKey = null, mode = 'build' } = {}) {
   const q = entry.chord?.quality
   const chord = entry.chord
 
-  let feel = 'move'
+  // Prefer explicit function from the key palette
+  if (entry.function && FEELS[entry.function]) {
+    const feel = entry.function
+    return {
+      feel,
+      feelLabel: FEELS[feel].label,
+      blurb: plainReason(entry.reason, feel),
+      tension: tensionFor(feel),
+    }
+  }
+
+  let feel = 'departure'
 
   if (mode === 'modulate' || entry.mode === 'modulate') {
     if (tag === 'arrival' || reason.includes('tonic') || reason.includes('new tonic')) {
       feel = 'home'
     } else if (tag === 'dominant' || reason.includes('v7') || reason.includes('v of')) {
-      feel = 'tighten'
+      feel = 'tension'
     } else if (tag === 'pivot') {
-      feel = 'move'
+      feel = 'departure'
     } else {
       feel = 'color'
     }
@@ -142,19 +146,18 @@ export function classifyFeel(entry, { homeKey = null, mode = 'build' } = {}) {
       reason.includes('tritone') ||
       isDominantQuality(q)
     ) {
-      feel = 'tighten'
+      feel = 'tension'
     } else if (reason.includes('plagal') || reason.includes('iv →')) {
       feel = 'home'
     } else if (reason.includes('deceptive')) {
       feel = 'color'
     } else {
-      feel = 'tighten'
+      feel = 'tension'
     }
-  } else {
-    // Build / stay in key
-    const isTonic = homeKey && chord && isTonicOfKey(chord, homeKey)
-    if (isTonic) {
-      feel = 'home'
+  } else if (homeKey && chord) {
+    const fn = harmonicFunctionForChord(chord, homeKey)
+    if (fn === 'color' || fn === 'home' || fn === 'departure' || fn === 'tension') {
+      feel = fn
     } else if (
       tag === 'color' ||
       reason.includes('chromatic') ||
@@ -163,35 +166,29 @@ export function classifyFeel(entry, { homeKey = null, mode = 'build' } = {}) {
       reason.includes('modal')
     ) {
       feel = 'color'
-    } else if (
-      isDominantQuality(q) ||
-      reason.includes('secondary dominant') ||
-      reason.includes('ii → v') ||
-      reason.includes('dominant')
-    ) {
-      feel = 'tighten'
-    } else if (
-      // Dominant-function majors pointing up a 4th feel tense even without 7
-      isMajorish(q) &&
-      (reason.includes('ascending 5th') || reason.includes('descending 5th')) &&
-      homeKey &&
-      chord &&
-      chord.root === (homeKey.tonic + 7) % 12
-    ) {
-      feel = 'tighten'
-    } else if (isMinorish(q) && reason.includes('ii →')) {
-      feel = 'tighten'
+    } else if (reason.includes('secondary') || isDominantQuality(q)) {
+      feel = 'tension'
     } else {
-      feel = 'move'
+      feel = 'color'
     }
+  } else if (
+    tag === 'color' ||
+    reason.includes('chromatic') ||
+    reason.includes('borrow') ||
+    reason.includes('tritone')
+  ) {
+    feel = 'color'
+  } else if (isDominantQuality(q) || reason.includes('dominant')) {
+    feel = 'tension'
   }
 
-  const meta = FEELS[feel]
+  feel = normalizeFeel(feel)
+  const meta = FEELS[feel] || FEELS.departure
   return {
     feel,
     feelLabel: meta.label,
     blurb: plainReason(entry.reason, feel),
-    tension: tensionFor(feel, entry.score || 0),
+    tension: tensionFor(feel),
   }
 }
 
@@ -205,9 +202,10 @@ export function enrichWithFeel(results, ctx = {}) {
 
 /** Group suggestions for the side panel */
 export function groupSuggestionsByFeel(suggestions) {
-  const byFeel = { home: [], move: [], tighten: [], color: [] }
+  const byFeel = { home: [], departure: [], tension: [], color: [] }
   for (const s of suggestions) {
-    const id = byFeel[s.feel] ? s.feel : 'move'
+    const feel = normalizeFeel(s.feel)
+    const id = byFeel[feel] ? feel : 'departure'
     byFeel[id].push(s)
   }
 
@@ -216,3 +214,5 @@ export function groupSuggestionsByFeel(suggestions) {
     items: group.feels.flatMap((f) => byFeel[f] || []),
   })).filter((g) => g.items.length > 0)
 }
+
+export { functionBlurb }

@@ -203,6 +203,91 @@ button {
   background: rgba(24, 24, 27, 0.06);
 }
 
+.metronome-control {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.metronome-control .metronome-toggle {
+  border-right: none;
+}
+
+.metronome-control .metronome-type-btn {
+  min-width: 1.7rem;
+  padding-left: 0.35rem;
+  padding-right: 0.45rem;
+  border-left: 1px solid var(--line);
+}
+
+.metronome-control.is-on .metronome-toggle,
+.metronome-control.is-on .metronome-type-btn {
+  border-color: var(--ink);
+  background: rgba(24, 24, 27, 0.06);
+}
+
+.metronome-control.is-on .metronome-type-btn {
+  border-left-color: var(--ink);
+}
+
+.metronome-type-menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 20;
+  min-width: 10.5rem;
+  padding: 0.3rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.metronome-type-menu__title {
+  margin: 0.15rem 0.55rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.metronome-type-menu__item {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  padding: 0.4rem 0.55rem;
+  cursor: pointer;
+}
+
+.metronome-type-menu__item:hover {
+  background: rgba(24, 24, 27, 0.06);
+}
+
+.metronome-type-menu__item.is-active {
+  background: rgba(24, 24, 27, 0.09);
+}
+
+.metronome-type-menu__label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.metronome-type-menu__item.is-active .metronome-type-menu__label::after {
+  content: ' ✓';
+}
+
+.metronome-type-menu__hint {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+}
+
 .transport {
   display: inline-flex;
   align-items: stretch;
@@ -938,7 +1023,7 @@ button {
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto;
   gap: 0.12rem 0.5rem;
   text-align: left;
   appearance: none;
@@ -951,47 +1036,9 @@ button {
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 
-.suggestion__tag {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: start;
-  justify-self: end;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 0.12rem 0.35rem;
-  border: 1px solid var(--line);
-  color: var(--ink-soft);
-}
-
-.suggestion__tag--home {
-  color: #166534;
-  border-color: #86efac;
-  background: #f0fdf4;
-}
-
-.suggestion__tag--move {
-  color: #3f3f46;
-  border-color: #d4d4d8;
-  background: #f4f4f5;
-}
-
-.suggestion__tag--tighten {
-  color: #9f1239;
-  border-color: #fecdd3;
-  background: #fff1f2;
-}
-
-.suggestion__tag--color {
-  color: #92400e;
-  border-color: #fde68a;
-  background: #fffbeb;
-}
-
 .suggestion__tension {
   grid-column: 2;
-  grid-row: 2 / span 2;
+  grid-row: 1 / span 2;
   align-self: center;
   display: inline-flex;
   gap: 3px;
@@ -1008,12 +1055,18 @@ button {
   background: #71717a;
 }
 
+.suggestion--tension .suggestion__dot.is-on,
 .suggestion--tighten .suggestion__dot.is-on {
   background: #e11d48;
 }
 
 .suggestion--home .suggestion__dot.is-on {
   background: #16a34a;
+}
+
+.suggestion--departure .suggestion__dot.is-on,
+.suggestion--move .suggestion__dot.is-on {
+  background: #71717a;
 }
 
 .suggestion--color .suggestion__dot.is-on {
