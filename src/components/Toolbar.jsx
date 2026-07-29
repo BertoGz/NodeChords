@@ -14,6 +14,8 @@ export default function Toolbar({
   canExport,
   canSave,
   saveStatus,
+  projectName = '',
+  staleFileSaveCount = 0,
   viewMode = 'graph',
   bpm = 120,
   metronomeEnabled = true,
@@ -26,6 +28,7 @@ export default function Toolbar({
   onImportMidi,
   onSaveFile,
   onLoadFile,
+  onProjects,
   onReset,
   onViewModeChange,
   onBpmChange,
@@ -81,7 +84,23 @@ export default function Toolbar({
     <div className="toolbar">
       <div className="toolbar__brand">
         <span className="toolbar__mark">NodeChords</span>
-        {saveStatus && <span className="toolbar__save">{saveStatus}</span>}
+        <div className="toolbar__meta">
+          {projectName && (
+            <span className="toolbar__project" title={projectName}>
+              {projectName}
+            </span>
+          )}
+          {saveStatus && <span className="toolbar__save">{saveStatus}</span>}
+        </div>
+        {staleFileSaveCount > 0 && (
+          <span
+            className="toolbar__stale-label"
+            title="Projects that have not been saved to a file in over 5 days"
+          >
+            {staleFileSaveCount} project{staleFileSaveCount === 1 ? '' : 's'} not
+            saved to file recently
+          </span>
+        )}
       </div>
       <div className="toolbar__actions">
         <div className="view-switch" role="group" aria-label="View">
@@ -212,6 +231,18 @@ export default function Toolbar({
           </button>
           {menuOpen && (
             <div className="file-menu__dropdown" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className="file-menu__item"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onProjects?.()
+                }}
+              >
+                New / Load project…
+              </button>
+              <div className="file-menu__sep" role="separator" />
               <button
                 type="button"
                 role="menuitem"

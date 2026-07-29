@@ -19,6 +19,7 @@ import Toolbar from './components/Toolbar.jsx'
 import TimingView from './components/TimingView.jsx'
 import ConfirmModal from './components/ConfirmModal.jsx'
 import ModulateModal from './components/ModulateModal.jsx'
+import ProjectPickerModal from './components/ProjectPickerModal.jsx'
 import { DEFAULT_VOICING, formatChord } from './theory/chords.js'
 import { createKey, formatKey } from './theory/keys.js'
 import {
@@ -47,7 +48,18 @@ import {
   DEFAULT_METRONOME_TYPE,
   normalizeMetronomeType,
 } from './audio/playChord.js'
-import { clearProject, createAutosave, loadProject, saveProject } from './storage/db.js'
+import {
+  clearProject,
+  countStaleFileSaves,
+  createAutosave,
+  createProject,
+  getActiveProjectId,
+  getProject,
+  listProjects,
+  markProjectFileSaved,
+  openProject,
+  saveProject,
+} from './storage/db.js'
 import {
   downloadProjectFile,
   projectFilenameFromNodes,
@@ -266,6 +278,11 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState('')
   const [resetOpen, setResetOpen] = useState(false)
   const [modulateOpen, setModulateOpen] = useState(false)
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false)
+  const [projectPickerRequired, setProjectPickerRequired] = useState(false)
+  const [activeProjectId, setActiveProjectId] = useState(null)
+  const [projectName, setProjectName] = useState('')
+  const [projectsMeta, setProjectsMeta] = useState([])
   const [playheadNodeId, setPlayheadNodeId] = useState(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [viewMode, setViewMode] = useState('graph')
@@ -276,6 +293,7 @@ export default function App() {
   const playheadAtEndRef = useRef(false)
   const autosaveRef = useRef(null)
   const lastAutosaveSignatureRef = useRef(null)
+  const activeProjectIdRef = useRef(null)
   const nodesRef = useRef(nodes)
   const edgesRef = useRef(edges)
   const flowRef = useRef(null)
@@ -289,6 +307,10 @@ export default function App() {
   }, [edges])
 
   useEffect(() => {
+    activeProjectIdRef.current = activeProjectId
+  }, [activeProjectId])
+
+  useEffect(() => {
     isPlayingRef.current = isPlaying
   }, [isPlaying])
 
@@ -299,10 +321,72 @@ export default function App() {
     return () => setProgressionStopHandler(null)
   }, [])
 
+  const refreshProjectsMeta = useCallback(async () => {
+    const list = await listProjects()
+    setProjectsMeta(list)
+    return list
+  }, [])
+
+  const applyProjectRecord = useCallback(
+    (project) => {
+      const loadedNodes = enrichNodes(
+        withDurationDefaults(project.nodes || []),
+        project.edges || [],
+      )
+      setNodes(loadedNodes)
+      setEdges(
+        (project.edges || []).map((e) => ({
+          ...defaultEdgeOptions,
+          ...e,
+        })),
+      )
+      setDraftKey(project.draftKey || createKey(0, 'major'))
+      setSelectedNodeId(
+        project.selectedNodeId ||
+          loadedNodes.find((n) => n.data?.isStart)?.id ||
+          loadedNodes[0]?.id ||
+          null,
+      )
+      if (project.bpm != null) setBpm(clampBpm(project.bpm))
+      else setBpm(DEFAULT_BPM)
+      if (typeof project.metronomeEnabled === 'boolean') {
+        setMetronomeEnabled(project.metronomeEnabled)
+      } else {
+        setMetronomeEnabled(true)
+      }
+      if (project.metronomeType != null) {
+        setMetronomeType(normalizeMetronomeType(project.metronomeType))
+      } else {
+        setMetronomeType(DEFAULT_METRONOME_TYPE)
+      }
+      syncIdCounterFromNodes(loadedNodes)
+      idCounter = 1
+      if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
+      setActiveProjectId(project.id)
+      setProjectName(project.name || 'Untitled')
+      setPlayheadNodeId(null)
+      playheadAtEndRef.current = false
+      setIsPlaying(false)
+      setViewMode('graph')
+      lastAutosaveSignatureRef.current = null
+    },
+    [setNodes, setEdges],
+  )
+
   useEffect(() => {
     autosaveRef.current = createAutosave(async (payload) => {
-      await saveProject(payload)
+      const id = activeProjectIdRef.current
+      if (!id) return
+      await saveProject(id, payload)
       setSaveStatus('Saved')
+      setProjectsMeta((prev) => {
+        const now = Date.now()
+        const next = prev.map((p) =>
+          p.id === id ? { ...p, updatedAt: now } : p,
+        )
+        next.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        return next
+      })
     }, 220)
   }, [])
 
@@ -310,34 +394,38 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const project = await loadProject()
+        const list = await listProjects()
         if (cancelled) return
-        if (project) {
-          const loadedNodes = enrichNodes(
-            withDurationDefaults(project.nodes || []),
-            project.edges || [],
-          )
-          setNodes(loadedNodes)
-          setEdges(
-            (project.edges || []).map((e) => ({
-              ...defaultEdgeOptions,
-              ...e,
-            })),
-          )
-          if (project.draftKey) setDraftKey(project.draftKey)
-          if (project.bpm != null) setBpm(clampBpm(project.bpm))
-          if (typeof project.metronomeEnabled === 'boolean') {
-            setMetronomeEnabled(project.metronomeEnabled)
+        setProjectsMeta(list)
+
+        const savedActiveId = await getActiveProjectId()
+        const preferredId =
+          (savedActiveId && list.some((p) => p.id === savedActiveId)
+            ? savedActiveId
+            : null) || list[0]?.id
+
+        if (preferredId) {
+          const project = await getProject(preferredId)
+          if (cancelled) return
+          if (project) {
+            applyProjectRecord(project)
+            setSaveStatus('Restored')
+            setProjectPickerRequired(false)
+            setProjectPickerOpen(false)
+          } else {
+            setProjectPickerRequired(true)
+            setProjectPickerOpen(true)
           }
-          if (project.metronomeType != null) {
-            setMetronomeType(normalizeMetronomeType(project.metronomeType))
-          }
-          syncIdCounterFromNodes(loadedNodes)
-          if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
-          setSaveStatus('Restored')
+        } else {
+          setProjectPickerRequired(true)
+          setProjectPickerOpen(true)
         }
       } catch (err) {
-        console.error('Failed to load project', err)
+        console.error('Failed to load projects', err)
+        if (!cancelled) {
+          setProjectPickerRequired(true)
+          setProjectPickerOpen(true)
+        }
       } finally {
         if (!cancelled) setHydrated(true)
       }
@@ -345,10 +433,10 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [setNodes, setEdges])
+  }, [applyProjectRecord])
 
   useEffect(() => {
-    if (!hydrated || !autosaveRef.current) return
+    if (!hydrated || !autosaveRef.current || !activeProjectId) return
     const payload = {
       nodes: serializeNodes(nodes),
       edges: serializeEdges(edges),
@@ -363,7 +451,21 @@ export default function App() {
     lastAutosaveSignatureRef.current = signature
     setSaveStatus('Saving…')
     autosaveRef.current.queue(payload)
-  }, [nodes, edges, draftKey, bpm, metronomeEnabled, metronomeType, hydrated])
+  }, [
+    nodes,
+    edges,
+    draftKey,
+    bpm,
+    metronomeEnabled,
+    metronomeType,
+    hydrated,
+    activeProjectId,
+  ])
+
+  const staleFileSaveCount = useMemo(
+    () => countStaleFileSaves(projectsMeta),
+    [projectsMeta],
+  )
 
   const startId = useMemo(() => startNodeId(nodes), [nodes])
   const hasStart = Boolean(startId)
@@ -830,7 +932,7 @@ export default function App() {
       setEdges([])
       setSelectedNodeId(null)
       idCounter = 1
-      clearProject().catch(() => {})
+      clearProject(activeProjectIdRef.current).catch(() => {})
       return
     }
 
@@ -911,12 +1013,37 @@ export default function App() {
       }
       syncIdCounterFromNodes(loadedNodes)
       if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
+      lastAutosaveSignatureRef.current = null
       setSaveStatus('Loaded')
     },
     [setNodes, setEdges],
   )
 
-  const handleSaveFile = useCallback(() => {
+  const persistActiveGraph = useCallback(
+    async (project) => {
+      const id = activeProjectIdRef.current
+      if (!id) return
+      await saveProject(id, {
+        nodes: serializeNodes(withDurationDefaults(project.nodes || [])),
+        edges: serializeEdges(project.edges || []),
+        draftKey: project.draftKey,
+        idCounter: project.idCounter,
+        bpm: project.bpm != null ? clampBpm(project.bpm) : DEFAULT_BPM,
+        metronomeEnabled:
+          typeof project.metronomeEnabled === 'boolean'
+            ? project.metronomeEnabled
+            : true,
+        metronomeType: normalizeMetronomeType(
+          project.metronomeType ?? metronomeType,
+        ),
+      })
+      await refreshProjectsMeta()
+    },
+    [metronomeType, refreshProjectsMeta],
+  )
+
+  const handleSaveFile = useCallback(async () => {
+    const id = activeProjectIdRef.current
     downloadProjectFile(
       {
         nodes: serializeNodes(nodes),
@@ -926,35 +1053,44 @@ export default function App() {
         bpm,
         metronomeEnabled,
         metronomeType,
+        name: projectName,
       },
-      projectFilenameFromNodes(nodes),
+      projectName
+        ? `${projectName.replace(/[^\w\-]+/g, '-').replace(/^-|-$/g, '') || 'project'}.json`
+        : projectFilenameFromNodes(nodes),
     )
+    if (id) {
+      try {
+        await markProjectFileSaved(id)
+        await refreshProjectsMeta()
+      } catch (err) {
+        console.error(err)
+      }
+    }
     setSaveStatus('Downloaded')
-  }, [nodes, edges, draftKey, bpm, metronomeEnabled, metronomeType])
+  }, [
+    nodes,
+    edges,
+    draftKey,
+    bpm,
+    metronomeEnabled,
+    metronomeType,
+    projectName,
+    refreshProjectsMeta,
+  ])
 
   const handleLoadFile = useCallback(
     async (file) => {
       try {
         const project = await readProjectFile(file)
         applyLoadedProject(project)
-        await saveProject({
-          nodes: serializeNodes(withDurationDefaults(project.nodes || [])),
-          edges: serializeEdges(project.edges || []),
-          draftKey: project.draftKey,
-          idCounter: project.idCounter,
-          bpm: project.bpm != null ? clampBpm(project.bpm) : DEFAULT_BPM,
-          metronomeEnabled:
-            typeof project.metronomeEnabled === 'boolean'
-              ? project.metronomeEnabled
-              : true,
-          metronomeType: normalizeMetronomeType(project.metronomeType),
-        })
+        await persistActiveGraph(project)
       } catch (err) {
         console.error(err)
         setSaveStatus(err.message || 'Load failed')
       }
     },
-    [applyLoadedProject],
+    [applyLoadedProject, persistActiveGraph],
   )
 
   const handleImportMidi = useCallback(
@@ -966,12 +1102,8 @@ export default function App() {
         setPlayheadNodeId(null)
         playheadAtEndRef.current = false
         applyLoadedProject(project)
-        await saveProject({
-          nodes: serializeNodes(withDurationDefaults(project.nodes || [])),
-          edges: serializeEdges(project.edges || []),
-          draftKey: project.draftKey,
-          idCounter: project.idCounter,
-          bpm: project.bpm != null ? clampBpm(project.bpm) : DEFAULT_BPM,
+        await persistActiveGraph({
+          ...project,
           metronomeEnabled: true,
           metronomeType,
         })
@@ -981,7 +1113,7 @@ export default function App() {
         setSaveStatus(err.message || 'Import failed')
       }
     },
-    [applyLoadedProject, metronomeType],
+    [applyLoadedProject, persistActiveGraph, metronomeType],
   )
 
   const handleReset = useCallback(() => {
@@ -997,10 +1129,63 @@ export default function App() {
     setMetronomeType(DEFAULT_METRONOME_TYPE)
     setViewMode('graph')
     idCounter = 1
-    clearProject().catch(() => {})
+    clearProject(activeProjectIdRef.current).catch(() => {})
+    lastAutosaveSignatureRef.current = null
     setSaveStatus('Cleared')
     setResetOpen(false)
   }, [setNodes, setEdges])
+
+  const handleOpenProjects = useCallback(async () => {
+    try {
+      await autosaveRef.current?.flush?.()
+    } catch {
+      /* ignore */
+    }
+    await refreshProjectsMeta()
+    setProjectPickerRequired(false)
+    setProjectPickerOpen(true)
+  }, [refreshProjectsMeta])
+
+  const handleCreateProject = useCallback(
+    async (name) => {
+      try {
+        await autosaveRef.current?.flush?.()
+      } catch {
+        /* ignore */
+      }
+      stopProgression({ silent: true })
+      const project = await createProject(name)
+      applyProjectRecord(project)
+      await refreshProjectsMeta()
+      setProjectPickerRequired(false)
+      setProjectPickerOpen(false)
+      setSaveStatus('Created')
+    },
+    [applyProjectRecord, refreshProjectsMeta],
+  )
+
+  const handleOpenProject = useCallback(
+    async (id) => {
+      if (id === activeProjectIdRef.current) {
+        setProjectPickerOpen(false)
+        setProjectPickerRequired(false)
+        return
+      }
+      try {
+        await autosaveRef.current?.flush?.()
+      } catch {
+        /* ignore */
+      }
+      stopProgression({ silent: true })
+      const project = await openProject(id)
+      applyProjectRecord(project)
+      await refreshProjectsMeta()
+      setProjectPickerRequired(false)
+      setProjectPickerOpen(false)
+      setSaveStatus('Restored')
+    },
+    [applyProjectRecord, refreshProjectsMeta],
+  )
 
   const pathSteps = useMemo(() => progressionPath(nodes, edges), [nodes, edges])
   const canPlay = pathSteps.length > 0
@@ -1047,6 +1232,23 @@ export default function App() {
     )
   }
 
+  if (!activeProjectId) {
+    return (
+      <div className="app app--loading">
+        <div className="app__glow app__glow--a" aria-hidden />
+        <div className="app__glow app__glow--b" aria-hidden />
+        <ProjectPickerModal
+          open={projectPickerOpen || projectPickerRequired}
+          required
+          projects={projectsMeta}
+          activeProjectId={null}
+          onCreate={handleCreateProject}
+          onOpen={handleOpenProject}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <div className="app__glow app__glow--a" aria-hidden />
@@ -1062,6 +1264,8 @@ export default function App() {
         canExport={canPlay}
         canSave={hasStart}
         saveStatus={saveStatus}
+        projectName={projectName}
+        staleFileSaveCount={staleFileSaveCount}
         viewMode={viewMode}
         bpm={bpm}
         metronomeEnabled={metronomeEnabled}
@@ -1074,6 +1278,7 @@ export default function App() {
         onImportMidi={handleImportMidi}
         onSaveFile={handleSaveFile}
         onLoadFile={handleLoadFile}
+        onProjects={handleOpenProjects}
         onReset={() => setResetOpen(true)}
         onViewModeChange={setViewMode}
         onBpmChange={(value) => setBpm(clampBpm(value))}
@@ -1081,10 +1286,22 @@ export default function App() {
         onMetronomeTypeChange={(value) => setMetronomeType(normalizeMetronomeType(value))}
       />
 
+      <ProjectPickerModal
+        open={projectPickerOpen}
+        required={projectPickerRequired}
+        projects={projectsMeta}
+        activeProjectId={activeProjectId}
+        onCreate={handleCreateProject}
+        onOpen={handleOpenProject}
+        onCancel={() => {
+          if (!projectPickerRequired) setProjectPickerOpen(false)
+        }}
+      />
+
       <ConfirmModal
         open={resetOpen}
         title="Reset progression?"
-        message="This clears the graph and saved project. This can’t be undone."
+        message="This clears the graph for the current project. This can’t be undone."
         confirmLabel="Reset"
         cancelLabel="Cancel"
         onConfirm={handleReset}
