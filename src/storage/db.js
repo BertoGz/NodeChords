@@ -353,6 +353,14 @@ export function createAutosave(saveFn, delayMs = 200) {
         lastSavedAt = Date.now()
       })
     },
+    /** Drop a pending save without writing (use when switching projects). */
+    cancel() {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      pending = null
+    },
     get lastSavedAt() {
       return lastSavedAt
     },

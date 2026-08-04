@@ -336,17 +336,23 @@ export default function App() {
 
   const applyProjectRecord = useCallback(
     (project) => {
+      const loadedEdges = (project.edges || []).map((e) => ({
+        ...defaultEdgeOptions,
+        ...e,
+      }))
       const loadedNodes = enrichNodes(
         withDurationDefaults(project.nodes || []),
-        project.edges || [],
+        loadedEdges,
       )
+
+      // Sync refs immediately so in-flight work can't see the previous graph/id.
+      nodesRef.current = loadedNodes
+      edgesRef.current = loadedEdges
+      activeProjectIdRef.current = project.id
+      lastAutosaveSignatureRef.current = null
+
       setNodes(loadedNodes)
-      setEdges(
-        (project.edges || []).map((e) => ({
-          ...defaultEdgeOptions,
-          ...e,
-        })),
-      )
+      setEdges(loadedEdges)
       setDraftKey(project.draftKey || createKey(0, 'major'))
       setSelectedNodeId(
         project.selectedNodeId ||
@@ -375,21 +381,22 @@ export default function App() {
       playheadAtEndRef.current = false
       setIsPlaying(false)
       setViewMode('graph')
-      lastAutosaveSignatureRef.current = null
     },
     [setNodes, setEdges],
   )
 
   useEffect(() => {
+    // Persist to the projectId captured when the payload was queued — never the
+    // "current" id at write time (that races when switching/creating projects).
     autosaveRef.current = createAutosave(async (payload) => {
-      const id = activeProjectIdRef.current
-      if (!id) return
-      await saveProject(id, payload)
+      const { projectId, ...graph } = payload || {}
+      if (!projectId) return
+      await saveProject(projectId, graph)
       setSaveStatus('Saved')
       setProjectsMeta((prev) => {
         const now = Date.now()
         const next = prev.map((p) =>
-          p.id === id ? { ...p, updatedAt: now } : p,
+          p.id === projectId ? { ...p, updatedAt: now } : p,
         )
         next.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
         return next
@@ -445,6 +452,7 @@ export default function App() {
   useEffect(() => {
     if (!hydrated || !autosaveRef.current || !activeProjectId) return
     const payload = {
+      projectId: activeProjectId,
       nodes: serializeNodes(nodes),
       edges: serializeEdges(edges),
       draftKey,
@@ -1023,17 +1031,19 @@ export default function App() {
 
   const applyLoadedProject = useCallback(
     (project) => {
+      const loadedEdges = (project.edges || []).map((e) => ({
+        ...defaultEdgeOptions,
+        ...e,
+      }))
       const loadedNodes = enrichNodes(
         withDurationDefaults(project.nodes || []),
-        project.edges || [],
+        loadedEdges,
       )
+      nodesRef.current = loadedNodes
+      edgesRef.current = loadedEdges
+      lastAutosaveSignatureRef.current = null
       setNodes(loadedNodes)
-      setEdges(
-        (project.edges || []).map((e) => ({
-          ...defaultEdgeOptions,
-          ...e,
-        })),
-      )
+      setEdges(loadedEdges)
       if (project.draftKey) setDraftKey(project.draftKey)
       setSelectedNodeId(
         project.selectedNodeId ||
@@ -1050,7 +1060,6 @@ export default function App() {
       }
       syncIdCounterFromNodes(loadedNodes)
       if (project.idCounter) idCounter = Math.max(idCounter, project.idCounter)
-      lastAutosaveSignatureRef.current = null
       setSaveStatus('Loaded')
     },
     [setNodes, setEdges],
@@ -1158,6 +1167,8 @@ export default function App() {
     setIsPlaying(false)
     setPlayheadNodeId(null)
     playheadAtEndRef.current = false
+    nodesRef.current = []
+    edgesRef.current = []
     setNodes([])
     setEdges([])
     setSelectedNodeId(null)
@@ -1190,6 +1201,7 @@ export default function App() {
       } catch {
         /* ignore */
       }
+      autosaveRef.current?.cancel?.()
       stopProgression({ silent: true })
       const project = await createProject(name)
       applyProjectRecord(project)
@@ -1213,6 +1225,7 @@ export default function App() {
       } catch {
         /* ignore */
       }
+      autosaveRef.current?.cancel?.()
       stopProgression({ silent: true })
       const project = await openProject(id)
       applyProjectRecord(project)
@@ -1427,6 +1440,7 @@ export default function App() {
             />
           ) : (
             <ReactFlow
+              key={activeProjectId}
               nodes={displayNodes}
               edges={edges}
               onNodesChange={handleNodesChange}
