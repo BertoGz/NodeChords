@@ -138,18 +138,6 @@ button {
   opacity: 0.9;
 }
 
-.toolbar__stale-label {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #a16207;
-  background: rgba(250, 204, 21, 0.18);
-  border: 1px solid rgba(161, 98, 7, 0.28);
-  padding: 0.12rem 0.4rem;
-  margin-top: 0.1rem;
-  width: fit-content;
-  max-width: 100%;
-}
 
 .app--loading {
   display: grid;
@@ -523,6 +511,21 @@ button {
   color: #fafafa;
 }
 
+.btn--compact {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.btn.is-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.btn--ghost.is-active:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
 .btn--danger:hover:not(:disabled) {
   background: #27272a;
 }
@@ -615,6 +618,19 @@ button {
   margin-top: 1rem;
   min-height: 0;
   flex: 1;
+}
+
+.project-picker__stale-label {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #a16207;
+  background: rgba(250, 204, 21, 0.18);
+  border: 1px solid rgba(161, 98, 7, 0.28);
+  padding: 0.28rem 0.5rem;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .project-picker__toolbar {
@@ -1048,6 +1064,29 @@ button {
   border-color: #7f1d1d;
 }
 
+.key-piano--chord {
+  left: auto;
+  right: 0;
+  width: min(calc(var(--chord-octaves, 2) * 8.25rem), calc(100vw - 2rem));
+}
+
+.key-piano__voicing {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.key-piano__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.key-piano__footer .key-piano__legend {
+  margin: 0;
+}
+
 .palette__search {
   width: 100%;
   margin-top: 0.75rem;
@@ -1172,9 +1211,16 @@ button {
 
 .panel__actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.4rem;
   padding: 0.75rem 1rem 0;
+}
+
+.panel__actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .panel__actions--confirm {
@@ -1385,59 +1431,6 @@ button {
 
 .palette__chord--inkey {
   border-color: rgba(82, 82, 91, 0.45);
-}
-
-.modulate-box {
-  padding: 0.75rem 1rem 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.modulate-box__tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.3rem;
-}
-
-.modulate-box__tab {
-  appearance: none;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink-soft);
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.4rem 0.35rem;
-  cursor: pointer;
-}
-
-.modulate-box__tab.is-active {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: var(--paper);
-}
-
-.modulate-box__select {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.modulate-box__select select {
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--ink);
-  padding: 0.4rem 0.45rem;
-  border: 1px solid var(--line);
-  background: #fff;
 }
 
 .chord-node__key {

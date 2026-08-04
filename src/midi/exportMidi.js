@@ -45,7 +45,11 @@ export function buildMidiFile(steps, { bpm = DEFAULT_BPM } = {}) {
     if (!chord) continue
     const tick = Math.round(ev.startBeat * PPQ)
     const durationTicks = Math.max(1, Math.round(ev.durationBeats * PPQ))
-    const notes = chordMidiNotes(chord, ev.voicing || ev.step?.voicing || DEFAULT_VOICING)
+    const notes = chordMidiNotes(
+      chord,
+      ev.voicing || ev.step?.voicing || DEFAULT_VOICING,
+      { bassOctave: ev.bassOctave ?? ev.step?.bassOctave ?? null },
+    )
     const label = formatChord(chord)
     const text = `Chord: ${label}`
     events.push({

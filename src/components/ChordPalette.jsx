@@ -19,6 +19,7 @@ export default function ChordPalette({
   preferDiatonic,
   showKeyPicker,
   voicing = DEFAULT_VOICING,
+  bassOctave = null,
 }) {
   const [query, setQuery] = useState('')
   const [rootFilter, setRootFilter] = useState(null)
@@ -144,7 +145,7 @@ export default function ChordPalette({
               disabled={disabled}
               title={QUALITY_LABELS[chord.quality] || chord.quality}
               onClick={() => {
-                playChord(chord, { voicing })
+                playChord(chord, { voicing, bassOctave })
                 onPick?.(chord)
               }}
             >

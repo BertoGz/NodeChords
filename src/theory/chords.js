@@ -119,6 +119,50 @@ export const VOICINGS = [
 
 export const DEFAULT_VOICING = 'balanced'
 
+export const BASS_OCTAVES = [2, 3, 4, 5, 6]
+export const DEFAULT_BASS_OCTAVE = null // "Auto" (keep current voicing algorithm)
+
+function midiForC(octave) {
+  // MIDI: C4 = 60 => 12 * (4 + 1)
+  return 12 * (octave + 1)
+}
+
+function adjustToBassOctave(notes, bassOctave) {
+  if (!Array.isArray(notes) || notes.length === 0) return notes
+  if (bassOctave == null) return notes
+
+  const notesMin = Math.min(...notes)
+  const targetMin = midiForC(bassOctave)
+  const targetMax = targetMin + 11
+  const targetCenter = (targetMin + targetMax) / 2
+
+  let best = null
+  let bestCost = Infinity
+
+  // Search a reasonable shift window (octaves) and pick the closest match.
+  // This keeps the UI simple while being robust across chord types.
+  for (let shiftOct = -8; shiftOct <= 8; shiftOct += 1) {
+    const shiftedMin = notesMin + shiftOct * 12
+    const inRange = shiftedMin >= targetMin && shiftedMin <= targetMax
+
+    // Cost is distance-to-range, with a slight preference for being near the middle.
+    const distToRange = shiftedMin < targetMin ? targetMin - shiftedMin : shiftedMin > targetMax ? shiftedMin - targetMax : 0
+    const centerBias = Math.abs(shiftedMin - targetCenter)
+    const cost = distToRange * 10 + centerBias
+
+    if (cost < bestCost || (cost === bestCost && Math.abs(shiftOct) < Math.abs(best?.shiftOct ?? 0))) {
+      best = { shiftOct, inRange }
+      bestCost = cost
+      // Early exit for perfect in-range center match.
+      if (inRange && centerBias === 0) break
+    }
+  }
+
+  if (!best) return notes
+  const shift = best.shiftOct * 12
+  return notes.map((n) => n + shift)
+}
+
 export function voicingLabel(id) {
   return VOICINGS.find((v) => v.id === id)?.label ?? 'Balanced'
 }
@@ -189,8 +233,13 @@ export function voicingMidiNotes(chord, voicing = DEFAULT_VOICING) {
 
 
 
-export function chordMidiNotes(chord, voicing = DEFAULT_VOICING) {
-  return voicingMidiNotes(chord, voicing)
+export function chordMidiNotes(
+  chord,
+  voicing = DEFAULT_VOICING,
+  { bassOctave = DEFAULT_BASS_OCTAVE } = {},
+) {
+  const notes = voicingMidiNotes(chord, voicing)
+  return adjustToBassOctave(notes, bassOctave)
 }
 
 export function allChords() {

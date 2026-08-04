@@ -200,12 +200,15 @@ export async function playNote(midi, duration = 0.55) {
   s.triggerAttackRelease(midiToNote(midi), duration, now)
 }
 
-export async function playChord(chord, { voicing = DEFAULT_VOICING, duration = 1.1 } = {}) {
+export async function playChord(
+  chord,
+  { voicing = DEFAULT_VOICING, bassOctave = null, duration = 1.1 } = {},
+) {
   if (!chord) return
   stopProgression()
   const s = await ensureAudio()
   const now = Tone.now()
-  const notes = chordMidiNotes(chord, voicing).map(midiToNote)
+  const notes = chordMidiNotes(chord, voicing, { bassOctave }).map(midiToNote)
   s.triggerAttackRelease(notes, duration, now)
 }
 
@@ -250,9 +253,11 @@ export async function playProgression(
     const absoluteIndex = steps.findIndex((s) => s.id === ev.id)
     const seconds = beatsToSeconds(ev.durationBeats, safeBpm)
     const noteLen = Math.max(0.12, seconds * 0.92)
-    const notes = chordMidiNotes(chord, ev.voicing || ev.step?.voicing || DEFAULT_VOICING).map(
-      midiToNote,
-    )
+    const notes = chordMidiNotes(
+      chord,
+      ev.voicing || ev.step?.voicing || DEFAULT_VOICING,
+      { bassOctave: ev.bassOctave ?? ev.step?.bassOctave ?? null },
+    ).map(midiToNote)
     const t = (ev.startBeat - startBeat) * beatSec
     const step = ev.step || steps[absoluteIndex]
 

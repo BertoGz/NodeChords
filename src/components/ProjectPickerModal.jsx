@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { isFileSaveStale } from '../storage/db.js'
+import { countStaleFileSaves, isFileSaveStale } from '../storage/db.js'
 
 function formatProjectDate(ts) {
   if (!ts) return '—'
@@ -60,6 +60,11 @@ export default function ProjectPickerModal({
       (a, b) => mult * ((a.updatedAt || 0) - (b.updatedAt || 0)),
     )
   }, [projects, query, sortDir])
+
+  const staleFileSaveCount = useMemo(
+    () => countStaleFileSaves(projects),
+    [projects],
+  )
 
   if (!open) return null
 
@@ -141,6 +146,15 @@ export default function ProjectPickerModal({
 
         {projects.length > 0 && (
           <div className="project-picker__list-block">
+            {staleFileSaveCount > 0 && (
+              <p
+                className="project-picker__stale-label"
+                title="Projects that have not been saved to a file in over 5 days"
+              >
+                {staleFileSaveCount} project
+                {staleFileSaveCount === 1 ? '' : 's'} not saved to file recently
+              </p>
+            )}
             <div className="project-picker__toolbar">
               <label className="project-picker__search">
                 <span className="sr-only">Search projects</span>

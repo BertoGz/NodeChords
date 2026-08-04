@@ -50,7 +50,6 @@ import {
 } from './audio/playChord.js'
 import {
   clearProject,
-  countStaleFileSaves,
   createAutosave,
   createProject,
   getActiveProjectId,
@@ -125,6 +124,11 @@ function nodeVoicing(node) {
   return node?.data?.voicing || DEFAULT_VOICING
 }
 
+function nodeBassOctave(node) {
+  // null => "Auto" (keep current voicing algorithm)
+  return node?.data?.bassOctave ?? null
+}
+
 function nodeDurationBeats(node) {
   return normalizeDurationBeats(node?.data?.durationBeats ?? DEFAULT_DURATION_BEATS)
 }
@@ -160,6 +164,7 @@ function withDurationDefaults(nodes) {
         n.data?.measure ?? inferredById.get(n.id) ?? DEFAULT_MEASURE,
       ),
       voicing: n.data?.voicing || DEFAULT_VOICING,
+      bassOctave: n.data?.bassOctave ?? null,
     },
   }))
 }
@@ -201,6 +206,7 @@ function progressionPath(nodes, edges) {
       id: start.id,
       chord: startChordValue,
       voicing: nodeVoicing(start),
+      bassOctave: nodeBassOctave(start),
       durationBeats: nodeDurationBeats(start),
       measure: nodeMeasure(start),
     },
@@ -216,6 +222,7 @@ function progressionPath(nodes, edges) {
       id: next.node.id,
       chord: nodeChord(next.node),
       voicing: nodeVoicing(next.node),
+      bassOctave: nodeBassOctave(next.node),
       durationBeats: nodeDurationBeats(next.node),
       measure: nodeMeasure(next.node),
     })
@@ -462,11 +469,6 @@ export default function App() {
     activeProjectId,
   ])
 
-  const staleFileSaveCount = useMemo(
-    () => countStaleFileSaves(projectsMeta),
-    [projectsMeta],
-  )
-
   const startId = useMemo(() => startNodeId(nodes), [nodes])
   const hasStart = Boolean(startId)
   const target = useMemo(() => startChord(nodes), [nodes])
@@ -486,6 +488,7 @@ export default function App() {
   const modulateTo = selectedNode?.data?.modulateTo ?? null
   const modulateRole = selectedNode?.data?.modulateRole ?? null
   const selectedVoicing = nodeVoicing(selectedNode)
+  const selectedBassOctave = nodeBassOctave(selectedNode)
 
   const suggestions = useMemo(() => {
     if (!selectedNode) return []
@@ -593,20 +596,56 @@ export default function App() {
     [nodes, edges, bpm, metronomeEnabled, metronomeType],
   )
 
-  const onSelectionChange = useCallback(
-    ({ nodes: sel }) => {
-      const id = sel[0]?.id ?? null
+  const selectNode = useCallback(
+    (id) => {
       setSelectedNodeId((prev) => (prev === id ? prev : id))
       // During playback the transport owns the playhead — clicks may select, not seek.
       if (!id || isPlayingRef.current) return
-      const steps = progressionPath(nodes, edges)
-      const idx = steps.findIndex((s) => s.id === id)
-      if (idx < 0) return
+      const steps = progressionPath(nodesRef.current, edgesRef.current)
+      if (!steps.some((s) => s.id === id)) return
       playheadAtEndRef.current = false
       setPlayheadNodeId((prev) => (prev === id ? prev : id))
     },
-    [nodes, edges],
+    [],
   )
+
+  // RF defaults: clickDistance=0 cancels click on any jitter, but drag only starts
+  // after nodeDragThreshold (1px). That dead zone drops selection entirely.
+  // Catch select changes from RF (mousedown / drag-start) so we don't depend on click.
+  const handleNodesChange = useCallback(
+    (changes) => {
+      onNodesChange(changes)
+      let selectedId
+      let sawSelect = false
+      for (const change of changes) {
+        if (change.type !== 'select') continue
+        sawSelect = true
+        if (change.selected) selectedId = change.id
+      }
+      if (!sawSelect) return
+      if (selectedId) selectNode(selectedId)
+      else setSelectedNodeId(null)
+    },
+    [onNodesChange, selectNode],
+  )
+
+  const onNodeClick = useCallback(
+    (_event, node) => {
+      selectNode(node?.id ?? null)
+    },
+    [selectNode],
+  )
+
+  const onNodeDragStart = useCallback(
+    (_event, node) => {
+      selectNode(node?.id ?? null)
+    },
+    [selectNode],
+  )
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNodeId(null)
+  }, [])
 
   const assignChordToSelected = useCallback(
     (chord) => {
@@ -664,6 +703,7 @@ export default function App() {
             intent: 'stay',
             modulateTo: null,
             voicing: DEFAULT_VOICING,
+            bassOctave: null,
             durationBeats: DEFAULT_DURATION_BEATS,
             measure: DEFAULT_MEASURE,
             isStart: true,
@@ -702,6 +742,7 @@ export default function App() {
     const sourceId = source.id
     const inheritedKey = source.data?.key ?? draftKey
     const inheritedVoicing = nodeVoicing(source)
+    const inheritedBassOctave = nodeBassOctave(source)
     const inheritedBeats = nodeDurationBeats(source)
     const path = progressionPath(nds, eds)
     const usedInPrev = beatsUsedInMeasure(path, nodeMeasure(source))
@@ -722,6 +763,7 @@ export default function App() {
         modulateFromKey: null,
         modulateRole: null,
         voicing: inheritedVoicing,
+          bassOctave: inheritedBassOctave,
         durationBeats: inheritedBeats,
         measure,
         isStart: false,
@@ -759,6 +801,20 @@ export default function App() {
       setNodes((nds) =>
         nds.map((n) =>
           n.id === selectedNodeId ? { ...n, data: { ...n.data, voicing } } : n,
+        ),
+      )
+    },
+    [selectedNodeId, setNodes],
+  )
+
+  const handleBassOctaveChange = useCallback(
+    (bassOctave) => {
+      if (!selectedNodeId) return
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === selectedNodeId
+            ? { ...n, data: { ...n.data, bassOctave: bassOctave ?? null } }
+            : n,
         ),
       )
     },
@@ -805,26 +861,6 @@ export default function App() {
     [setNodes],
   )
 
-  const handleStayInKey = useCallback(() => {
-    if (!selectedNodeId) return
-    setNodes((nds) => {
-      const next = nds.map((n) => {
-        if (n.id !== selectedNodeId) return n
-        return {
-          ...n,
-          data: {
-            ...n.data,
-            intent: 'stay',
-            modulateTo: null,
-            modulateFromKey: null,
-            modulateRole: null,
-          },
-        }
-      })
-      return enrichNodes(next, edges)
-    })
-  }, [selectedNodeId, edges, setNodes])
-
   const handleStartModulate = useCallback(
     ({ key: targetKey, setupLength }) => {
       if (!selectedNodeId || !targetKey) return
@@ -867,6 +903,7 @@ export default function App() {
             modulateFromKey: fromKey,
             modulateRole: isLast ? 'arrival' : 'setup',
             voicing: nodeVoicing(source),
+            bassOctave: nodeBassOctave(source),
             durationBeats: nodeDurationBeats(source),
             // One modulation step per measure so timing view doesn't stack them.
             measure: normalizeMeasure(sourceMeasure + i),
@@ -1211,13 +1248,15 @@ export default function App() {
     () =>
       enrichNodes(nodes, edges).map((n) => ({
         ...n,
+        // Keep RF visual selection in sync with app selection (single source of truth).
+        selected: n.id === selectedNodeId,
         data: {
           ...n.data,
           playhead: n.id === playheadNodeId,
           playing: isPlaying && n.id === playheadNodeId,
         },
       })),
-    [nodes, edges, playheadNodeId, isPlaying],
+    [nodes, edges, playheadNodeId, isPlaying, selectedNodeId],
   )
 
   const paletteKey = hasStart
@@ -1265,7 +1304,6 @@ export default function App() {
         canSave={hasStart}
         saveStatus={saveStatus}
         projectName={projectName}
-        staleFileSaveCount={staleFileSaveCount}
         viewMode={viewMode}
         bpm={bpm}
         metronomeEnabled={metronomeEnabled}
@@ -1327,6 +1365,7 @@ export default function App() {
           onPick={handlePickChord}
           disabled={false}
           voicing={selectedVoicing}
+          bassOctave={selectedBassOctave}
           showKeyPicker={
             !hasStart ||
             Boolean(selectedNode && selectedNode.data?.intent !== 'modulate')
@@ -1390,10 +1429,12 @@ export default function App() {
             <ReactFlow
               nodes={displayNodes}
               edges={edges}
-              onNodesChange={onNodesChange}
+              onNodesChange={handleNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
-              onSelectionChange={onSelectionChange}
+              onNodeClick={onNodeClick}
+              onNodeDragStart={onNodeDragStart}
+              onPaneClick={onPaneClick}
               onInit={(instance) => {
                 flowRef.current = instance
               }}
@@ -1402,6 +1443,10 @@ export default function App() {
               fitView
               fitViewOptions={{ padding: 0.35 }}
               selectionMode={SelectionMode.Partial}
+              // Match thresholds so tiny pointer jitter can't land in the
+              // "not a click, not a drag yet" dead zone that drops selection.
+              nodeDragThreshold={5}
+              nodeClickDistance={5}
               deleteKeyCode={null}
               proOptions={{ hideAttribution: true }}
               colorMode="light"
@@ -1428,9 +1473,10 @@ export default function App() {
           modulateTo={modulateTo}
           modulateRole={modulateRole}
           voicing={selectedVoicing}
+          bassOctave={selectedBassOctave}
           onVoicingChange={handleVoicingChange}
+          onBassOctaveChange={handleBassOctaveChange}
           onAssign={assignChordToSelected}
-          onStayInKey={handleStayInKey}
           onOpenModulate={() => setModulateOpen(true)}
         />
       </div>

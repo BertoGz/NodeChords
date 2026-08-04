@@ -251,6 +251,7 @@ function buildProject(steps, { bpm }) {
       modulateFromKey: null,
       modulateRole: null,
       voicing: DEFAULT_VOICING,
+        bassOctave: null,
       durationBeats: step.durationBeats,
       measure: step.measure,
       isStart: i === 0,
